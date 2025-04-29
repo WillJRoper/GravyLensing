@@ -399,7 +399,7 @@ void LensMask::applyLensing(const cv::Mat &background) {
     // 3) pad with zero (no periodic/reflect artifacts)
     cv::Mat paddedMask;
     cv::copyMakeBorder(floatMask, paddedMask, top, bottom, left, right,
-                       cv::BORDER_CONSTANT, cv::Scalar(0.0f));
+                       cv::BORDER_REFLECT);
 
     // 4) copy into your raw float* buffer in one go
     std::memcpy(maskBuf_, paddedMask.ptr<float>(),
@@ -455,8 +455,7 @@ void LensMask::applyLensing(const cv::Mat &background) {
   {
     std::lock_guard lk(lensedMutex_);
     cv::remap(background, latestLensed_, mapX, mapY, cv::INTER_LINEAR,
-              cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0) // black border
-    );
+              cv::BORDER_REFLECT);
 
     // Flag that we have a new lensed image
     newLensedImageReady_ = true;
