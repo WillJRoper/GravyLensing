@@ -16,6 +16,7 @@ A real-time gravitational lensing demo application written in C++.
 - Optimise segementation step to remove bottleneck and smooth out small scale variations.
 - Enable turning on and off of "lens" feed (i.e. the person) in output video feed.
 - Utilise GPUs when available.
+- Scalable lensing strength.
 
 ## Prerequisites
 
@@ -91,7 +92,7 @@ For libtorch, see their [installation instructions](https://pytorch.org/). You w
 
 We provide a unified Python script, `get_models.py` (in the `models/` directory), to generate high-performance TorchScript or ONNX artifacts for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
 
-   NOTE: ONNX is not yet supported in the C++ app but will be soon.
+NOTE: ONNX is not yet supported in the C++ app but will be soon.
 
 **Install prerequisites**
 
