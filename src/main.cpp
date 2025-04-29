@@ -120,20 +120,24 @@ int main(int argc, char **argv) {
     // Segment & lens
     lens.applyLensing(backgrounds.current());
 
-    // Push into the UI
-    {
-      std::lock_guard lk(camFeed->frameMutex_);
-      vp.setImage(camFeed->latestFrame_); // top-left
-    }
-
-    {
-      std::lock_guard lk(lens.maskMutex_);
-      vp.setMask(lens.latestMask_); // top-right
-    }
-
+    // Update the new lensed image (we always need to do this regardless of
+    // whether we are debugging or not)
     if (lens.newLensedImageReady_) {
       std::lock_guard lk(lens.lensedMutex_);
-      vp.setLens(lens.latestLensed_); // bottom-right
+      vp.setLens(lens.latestLensed_);
+    }
+
+    // Update the rest of the view port if we are in debug mode
+    if (opts.debugGrid) {
+      {
+        std::lock_guard lk(camFeed->frameMutex_);
+        vp.setImage(camFeed->latestFrame_); // top-left
+      }
+
+      {
+        std::lock_guard lk(lens.maskMutex_);
+        vp.setMask(lens.latestMask_); // top-right
+      }
     }
 
     // Process Qt events (gives you windowing, input, etc.)
