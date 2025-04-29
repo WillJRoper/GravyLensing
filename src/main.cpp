@@ -51,6 +51,7 @@ int main(int argc, char **argv) {
   float softening = opts.softening;
   int maskScale = opts.maskScale;
   int deviceIndex = opts.deviceIndex;
+  int padFactor = opts.padFactor;
 
   // Use threaded FFTW
   fftwf_init_threads();
@@ -75,8 +76,7 @@ int main(int argc, char **argv) {
   const std::string modelPath =
       "/Users/willroper/Miscellaneous/gravy_lensing/models/"
       "deeplabv3_mobilenet_v3_large.pt";
-  LensMask lens(camFeed, softening,
-                /*padFactor=*/2, strength, modelPath, maskScale);
+  LensMask lens(camFeed, softening, padFactor, strength, modelPath, maskScale);
 
   // Set up ViewPort
   ViewPort vp;

@@ -47,12 +47,9 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
       // Pick device at construction time:
       device_(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU) {
 
-  // Ensure we always have a valid mask and lensed image of the right size
-  latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
-  latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
-
   // Update the Geometry (we call this function explicitly because it
-  // also handles all the FFTW allocations and builds the kernels)
+  // also handles all the FFTW allocations and builds the kernels and the
+  // latest mask and lensed matrices)
   updateGeometry(width_, height_);
 
   // Load TorchScript segmentation model onto device_
@@ -71,6 +68,10 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
 }
 
 void LensMask::allocateFFTWKernels() {
+
+  // Lock the mutex to ensure thread safety
+  std::lock_guard lk(fftwKernelMutex_);
+
   // Allocate the FFTW buffers for the kernels
   kernelX_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
   kernelY_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
@@ -87,6 +88,10 @@ void LensMask::allocateFFTWKernels() {
 }
 
 void LensMask::freeFFTWKernels() {
+
+  // Lock the mutex to ensure thread safety
+  std::lock_guard lk(fftwKernelMutex_);
+
   if (planKx_)
     fftwf_destroy_plan(planKx_);
   if (planKy_)
@@ -102,6 +107,11 @@ void LensMask::freeFFTWKernels() {
 }
 
 void LensMask::allocateFFTWDeflections() {
+
+  // Lock the mutex to ensure thread safety
+  std::lock_guard lk(fftwDeflectionMutex_);
+
+  // Allocate the FFTW buffers for the deflections
   maskBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
   maskFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
                                           (padWidth_ / 2 + 1));
@@ -126,6 +136,11 @@ void LensMask::allocateFFTWDeflections() {
 }
 
 void LensMask::freeFFTWDeflections() {
+
+  // Lock the mutex to ensure thread safety
+  std::lock_guard lk(fftwDeflectionMutex_);
+
+  // Free the FFTW plans and buffers
   if (maskBuf_)
     fftwf_free(maskBuf_);
   if (maskFT_)
@@ -161,6 +176,9 @@ LensMask::~LensMask() {
 // Person Segmentation
 // -----------------------
 void LensMask::detectPersonMask() {
+
+  std::lock_guard lk(geometryMutex_);
+
   // 0) Bail if no new frame
   if (!camFeed_->newFrameReady_)
     return;
@@ -277,6 +295,9 @@ void LensMask::shadeMask(cv::Mat &frame) {
 
 // Build the real-space deflection kernels and FFT them
 void LensMask::buildKernels() {
+
+  std::lock_guard lk(fftwKernelMutex_);
+
   const int H = padHeight_;
   const int W = padWidth_;
   const int N = H * W;
@@ -339,6 +360,8 @@ void LensMask::buildKernels() {
 // Apply Lensing
 // -----------------------
 void LensMask::applyLensing(const cv::Mat &background) {
+
+  std::lock_guard lk(fftwDeflectionMutex_);
 
   // If we have no new mask to process just pass through the background
   if (!newMaskReady_) {
@@ -479,6 +502,7 @@ void LensMask::segmentationLoop() {
  * @param height  New height of the lens
  */
 void LensMask::updateGeometry(int width, int height) {
+
   // Update the lens geometry
   width_ = width;
   height_ = height;
@@ -519,8 +543,14 @@ void LensMask::updateGeometry(int width, int height) {
   }
 
   // Rebuild the mask and lensed images
-  latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
-  latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
+  {
+    std::lock_guard lk(maskMutex_);
+    latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
+  }
+  {
+    std::lock_guard lk(lensedMutex_);
+    latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
+  }
 
   // Update the camera feed
   camFeed_->updateGeometry(width_, height_);

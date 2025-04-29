@@ -62,6 +62,9 @@ public:
   cv::Mat latestLensed_;
   std::mutex lensedMutex_; // guards latestLensed_
 
+  // Define a lock for updating the Geometry
+  std::mutex geometryMutex_;
+
   /**
    * @brief Constructor
    *
@@ -125,6 +128,10 @@ private:
   int fastW_, fastH_;        // dimensions for the fast segmentation image
   std::string modelPath_;    // Path to the segmentation model
 
+  // Define a locks for the FFTW kernels and deflections
+  std::mutex fftwKernelMutex_;
+  std::mutex fftwDeflectionMutex_;
+
   // Internal state for segmentation
   torch::jit::script::Module segmentModel_;
   torch::Device device_;
@@ -140,8 +147,8 @@ private:
   float *kernelY_ = nullptr;
   fftwf_complex *Kx_ft_ = nullptr;
   fftwf_complex *Ky_ft_ = nullptr;
-  fftwf_plan planKx_;
-  fftwf_plan planKy_;
+  fftwf_plan planKx_ = nullptr;
+  fftwf_plan planKy_ = nullptr;
 
   // FFT buffers/plans for mask and deflection
   float *maskBuf_ = nullptr;        // size padH*padW
@@ -151,9 +158,9 @@ private:
   float *defXBuf_ = nullptr;        // size padH*padW
   float *defYBuf_ = nullptr;        // size padH*padW
 
-  fftwf_plan planMask_; // r2c on maskBuf_
-  fftwf_plan planDefX_; // c2r for defXBuf_
-  fftwf_plan planDefY_; // c2r for defYBuf_
+  fftwf_plan planMask_ = nullptr;
+  fftwf_plan planDefX_ = nullptr;
+  fftwf_plan planDefY_ = nullptr;
 
   // Allocate the FFTW plans and buffers for the kernels
   void allocateFFTWKernels();

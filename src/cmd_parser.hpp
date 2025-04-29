@@ -36,6 +36,7 @@ public:
   int maskScale;
   int deviceIndex;
   bool debugGrid;
+  int padFactor;
 
   // Constructor is also the parser
   static CommandLineOptions parse(QApplication &app) {
@@ -79,6 +80,12 @@ public:
         "Show a debugging grid with the camera feed, mask, and lensed image.");
     parser.addOption(debugGridOption);
 
+    // --pad-factor <int> (default 2)
+    QCommandLineOption padFactorOption(QStringList() << "p" << "padFactor",
+                                       "Padding factor for FFT (int).",
+                                       "padFactor", "2");
+    parser.addOption(padFactorOption);
+
     parser.process(app);
 
     // Validate required --nthreads
@@ -120,6 +127,12 @@ public:
     }
 
     opts.debugGrid = parser.isSet(debugGridOption);
+
+    opts.padFactor = parser.value(padFactorOption).toInt(&ok);
+    if (!ok) {
+      std::cerr << "Error: --padFactor must be a float.\n";
+      std::exit(-1);
+    }
 
     return opts;
   }
