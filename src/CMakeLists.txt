@@ -9,31 +9,52 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ============================================================================
 # FFTW3 Configuration (single-precision + threads)
 
-# Path to FFTW installation (adjust as needed). For Homebrew on macOS ARM:
-set(FFTW3_ROOT "/opt/homebrew/Cellar/fftw/3.3.10_2")
-include_directories("${FFTW3_ROOT}/include")
+# Allow user to specify FFTW3 installation prefix (e.g., /usr/local, /opt/homebrew)
+option(FFTW3_ROOT "Path to FFTW3 installation prefix" "")
+if(FFTW3_ROOT)
+  list(APPEND CMAKE_PREFIX_PATH "${FFTW3_ROOT}")
+endif()
 
-# Locate the core single-precision FFTW library (libfftw3f)
+# Find FFTW3 headers
+find_path(FFTW3_INCLUDE_DIR
+  NAMES fftw3.h
+  PATHS
+    ${FFTW3_ROOT}/include
+    /usr/local/include
+    /opt/local/include
+    /usr/include
+)
+
+# Find single-precision FFTW library
 find_library(FFTW3F_LIB
   NAMES fftw3f
-  HINTS "${FFTW3_ROOT}/lib"
-  NO_DEFAULT_PATH
+  PATHS
+    ${FFTW3_ROOT}/lib
+    /usr/local/lib
+    /opt/local/lib
+    /usr/lib
 )
-if(NOT FFTW3F_LIB)
-  message(FATAL_ERROR "Could not locate libfftw3f in ${FFTW3_ROOT}/lib")
-endif()
 
-# Locate the threaded FFTW wrapper (libfftw3f_threads)
+# Find threaded FFTW wrapper library
 find_library(FFTW3F_THREADS_LIB
   NAMES fftw3f_threads
-  HINTS "${FFTW3_ROOT}/lib"
-  NO_DEFAULT_PATH
+  PATHS
+    ${FFTW3_ROOT}/lib
+    /usr/local/lib
+    /opt/local/lib
+    /usr/lib
 )
-if(NOT FFTW3F_THREADS_LIB)
-  message(FATAL_ERROR "Could not locate libfftw3f_threads in ${FFTW3_ROOT}/lib")
+
+# Error out if any component is missing
+if(NOT FFTW3_INCLUDE_DIR OR NOT FFTW3F_LIB OR NOT FFTW3F_THREADS_LIB)
+  message(FATAL_ERROR
+    "Could not locate FFTW3 (single-precision + threads).\n"
+    "Please install FFTW3 or set FFTW3_ROOT to its installation prefix."
+  )
 endif()
 
-# Combine libraries for linking
+# Include FFTW headers and bundle libraries
+include_directories("${FFTW3_INCLUDE_DIR}")
 set(FFTW3_LIBRARIES
   ${FFTW3F_LIB}
   ${FFTW3F_THREADS_LIB}
