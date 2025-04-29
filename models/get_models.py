@@ -130,7 +130,7 @@ def main():
     # Prepare output path
     os.makedirs("models", exist_ok=True)
     ext = "onnx" if args.format == "onnx" else "pt"
-    out_path = os.path.join("models", f"{args.model}_model.{ext}")
+    out_path = f"{args.model}_{args.format}_model.{ext}"
 
     # Dummy tensor for shape definitions
     dummy = torch.randn(1, 3, args.height, args.width, device=device)
