@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
     }
 
     // Segment & lens
-    lens.applyLensing(backgrounds.current());
+    lens.applyLensing(backgrounds.current(), nthreads);
 
     // Update the new lensed image (we always need to do this regardless of
     // whether we are debugging or not)

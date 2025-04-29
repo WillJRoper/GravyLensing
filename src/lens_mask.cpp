@@ -26,6 +26,7 @@
 #include <cstring>
 #include <fftw3.h>
 #include <iostream>
+#include <omp.h>
 #include <opencv2/imgproc.hpp> // for cv::cvtColor, cv::compare, etc.
 #include <torch/script.h>      // for torch::jit::script::Module
 #include <torch/torch.h>       // for torch::cuda::is_available, tensor ops
@@ -359,61 +360,63 @@ void LensMask::buildKernels() {
 // -----------------------
 // Apply Lensing
 // -----------------------
-void LensMask::applyLensing(const cv::Mat &background) {
-
+void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
+  // 1) FFTW mutex and quick-out if no new mask
   std::lock_guard lk(fftwDeflectionMutex_);
-
-  // If we have no new mask to process just pass through the background
-  if (!newMaskReady_) {
+  if (!newMaskReady_)
     return;
-  }
 
-  // Get a local copy of the mask under lock and then flag we are done with it
+  // 2) Grab a local copy of the mask under its own lock
   cv::Mat maskCopy;
   {
     std::lock_guard lk(maskMutex_);
-    if (latestMask_.empty()) {
+    if (latestMask_.empty())
       return;
-    }
     latestMask_.copyTo(maskCopy);
     newMaskReady_ = false;
   }
 
-  // Lazy shorthands
-  const int H = height_, W = width_;
-  const int pH = padHeight_, pW = padWidth_;
+  // 3) Dimensions
+  const int H = height_;
+  const int W = width_;
+  const int pH = padHeight_;
+  const int pW = padWidth_;
   const int pWC = pW / 2 + 1;
 
-  // Fill maskBuf_ with padded mask (float 0/1)
+  // 4) Direct‐fill maskBuf_ with padded 0/1 mask using REFLECT padding
   {
-    // 1) convert maskCopy (uchar 0/255) → float 0/1
-    cv::Mat floatMask;
-    maskCopy.convertTo(floatMask, CV_32F, 1.0f / 255.0f);
-
-    // 2) compute border sizes
     const int top = (pH - H) / 2;
     const int left = (pW - W) / 2;
-    const int bottom = pH - H - top;
-    const int right = pW - W - left;
+    // note: bottom = pH - H - top, right = pW - W - left, but we infer from
+    // loops
 
-    // 3) pad with zero (no periodic/reflect artifacts)
-    cv::Mat paddedMask;
-    cv::copyMakeBorder(floatMask, paddedMask, top, bottom, left, right,
-                       cv::BORDER_REFLECT);
+    float *dst = maskBuf_;
+    const float scale = 1.0f / 255.0f;
 
-    // 4) copy into your raw float* buffer in one go
-    std::memcpy(maskBuf_, paddedMask.ptr<float>(),
-                size_t(pH) * size_t(pW) * sizeof(float));
+    // for each row in padded buffer
+    for (int y_pad = 0; y_pad < pH; ++y_pad) {
+      // compute reflected source y
+      int y0 = y_pad - top;
+      int y_ref = (y0 < 0 ? -y0 - 1 : (y0 >= H ? 2 * H - y0 - 1 : y0));
+      const uchar *srcRow = maskCopy.ptr<uchar>(y_ref);
+
+      // for each column in padded buffer
+      for (int x_pad = 0; x_pad < pW; ++x_pad) {
+        int x0 = x_pad - left;
+        int x_ref = (x0 < 0 ? -x0 - 1 : (x0 >= W ? 2 * W - x0 - 1 : x0));
+        *dst++ = srcRow[x_ref] * scale;
+      }
+    }
   }
 
-  // FFT the mask → maskFT_
-  {
-    fftwf_execute(planMask_); // maskBuf_ → maskFT_
-  }
+  // 5) FFT forward of mask
+  fftwf_execute(planMask_);
 
-  // Multiply in Fourier space: defXFT_ = maskFT_ * Kx_ft_, same for Y
+  // 6) Multiply in Fourier space (X and Y deflections)
   {
-    for (int idx = 0, end = pH * pWC; idx < end; ++idx) {
+    const int end = pH * pWC;
+#pragma omp parallel for num_threads(nthreads - 1)
+    for (int idx = 0; idx < end; ++idx) {
       float a = maskFT_[idx][0], b = maskFT_[idx][1];
       float c = Kx_ft_[idx][0], d = Kx_ft_[idx][1];
       defXFT_[idx][0] = a * c - b * d;
@@ -425,39 +428,39 @@ void LensMask::applyLensing(const cv::Mat &background) {
     }
   }
 
-  // Inverse FFT → defXBuf_, defYBuf_
-  {
-    fftwf_execute(planDefX_);
-    fftwf_execute(planDefY_);
-  }
+  // 7) Inverse FFT → defXBuf_, defYBuf_
+  fftwf_execute(planDefX_);
+  fftwf_execute(planDefY_);
 
-  // Build remap arrays and crop to [H×W]
-  cv::Mat mapX(H, W, CV_32FC1), mapY(H, W, CV_32FC1);
+  // 8) Build remap arrays in one vectorizable loop
   {
-    int offY = (pH - H) / 2, offX = (pW - W) / 2;
-    for (int y = 0; y < H; ++y) {
-      float *mpx = mapX.ptr<float>(y);
-      float *mpy = mapY.ptr<float>(y);
-      const uchar *msk = maskCopy.ptr<uchar>(y);
-      for (int x = 0; x < W; ++x) {
-        float dx = defXBuf_[(y + offY) * pW + (x + offX)] * strength_;
-        float dy = defYBuf_[(y + offY) * pW + (x + offX)] * strength_;
-        // if (msk[x]) {
-        //   dx = dy = 0.f;
-        // }
-        mpx[x] = std::clamp(x + dx, 0.0f, float(W - 1));
-        mpy[x] = std::clamp(y + dy, 0.0f, float(H - 1));
-      }
+    const int offY = (pH - H) / 2, offX = (pW - W) / 2;
+    const int HW = H * W;
+    float *mXdata = reinterpret_cast<float *>(mapX_.data);
+    float *mYdata = reinterpret_cast<float *>(mapY_.data);
+
+#pragma omp parallel for num_threads(nthreads - 1)
+    for (int idx = 0; idx < HW; ++idx) {
+      int y = idx / W;
+      int x = idx - y * W;
+
+      float dx = defXBuf_[(y + offY) * pW + (x + offX)] * strength_;
+      float dy = defYBuf_[(y + offY) * pW + (x + offX)] * strength_;
+
+      float xx = x + dx;
+      float yy = y + dy;
+
+      // clamp in a SIMD-friendly way
+      mXdata[idx] = xx < 0.0f ? 0.0f : xx > W - 1 ? W - 1 : xx;
+      mYdata[idx] = yy < 0.0f ? 0.0f : yy > H - 1 ? H - 1 : yy;
     }
   }
 
-  // Perform the remap to get to our actual output
+  // 9) Final remap under lensedMutex_
   {
     std::lock_guard lk(lensedMutex_);
-    cv::remap(background, latestLensed_, mapX, mapY, cv::INTER_LINEAR,
+    cv::remap(background, latestLensed_, mapX_, mapY_, cv::INTER_LINEAR,
               cv::BORDER_REFLECT);
-
-    // Flag that we have a new lensed image
     newLensedImageReady_ = true;
   }
 }
@@ -550,6 +553,12 @@ void LensMask::updateGeometry(int width, int height) {
     std::lock_guard lk(lensedMutex_);
     latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
   }
+
+  // Release and reallocate the mask and map matrices
+  floatMask_ = cv::Mat::zeros(height_, width_, CV_32FC1);
+  paddedMask_ = cv::Mat::zeros(padHeight_, padWidth_, CV_32FC1);
+  mapX_ = cv::Mat::zeros(height_, width_, CV_32FC1);
+  mapY_ = cv::Mat::zeros(height_, width_, CV_32FC1);
 
   // Update the camera feed
   camFeed_->updateGeometry(width_, height_);

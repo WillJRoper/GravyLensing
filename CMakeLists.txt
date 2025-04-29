@@ -7,6 +7,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ============================================================================
+# OpenMP Configuration
+# Find and enable OpenMP
+find_package(OpenMP REQUIRED)
+if(OpenMP_CXX_FOUND)
+  message(STATUS "Found OpenMP: ${OpenMP_CXX_FLAGS}")
+else()
+  message(FATAL_ERROR "OpenMP not found. Please install a compiler with OpenMP support.")
+endif()
+
+# ============================================================================
 # FFTW3 Configuration (single-precision + threads)
 
 # Allow user to specify FFTW3 installation prefix (e.g., /usr/local, /opt/homebrew)
@@ -110,6 +120,9 @@ set(SOURCES
 
 # Define the executable target
 add_executable(gravy_lens ${SOURCES})
+
+# Link OpenMP target (automatically adds appropriate compile & link flags)
+target_link_libraries(gravy_lens PRIVATE OpenMP::OpenMP_CXX)
 
 # Disable Qt's SIGNAL/SLOT macros so we don't break other libraries
 target_compile_definitions(gravy_lens

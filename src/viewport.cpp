@@ -143,7 +143,8 @@ void ViewPort::keyPressEvent(QKeyEvent *event) {
     else {
       std::cerr << "No background loaded at index " << idx << "; only have "
                 << backgrounds_->size() << " images." << std::endl;
-      std::cerr << "Press '0'..'9' to switch backgrounds." << std::endl;
+      std::cerr << "Press '0'..'" << backgrounds_->size() - 1
+                << "' to switch backgrounds." << std::endl;
     }
   }
 

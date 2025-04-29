@@ -107,7 +107,7 @@ public:
    * @param background   CV_8UC3 BGR background image
    * @param output       CV_8UC3 BGR output image (same size as background)
    */
-  void applyLensing(const cv::Mat &background);
+  void applyLensing(const cv::Mat &background, int nthreads = 1);
 
   /// Start the segmentation worker thread
   void startAsyncSegmentation();
@@ -161,6 +161,12 @@ private:
   fftwf_plan planMask_ = nullptr;
   fftwf_plan planDefX_ = nullptr;
   fftwf_plan planDefY_ = nullptr;
+
+  // Masks used during applyLensing
+  cv::Mat floatMask_, paddedMask_;
+
+  // Deflection maps used during applyLensing
+  cv::Mat mapX_, mapY_;
 
   // Allocate the FFTW plans and buffers for the kernels
   void allocateFFTWKernels();
