@@ -35,6 +35,7 @@ public:
   float softening;
   int maskScale;
   int deviceIndex;
+  bool debugGrid;
 
   // Constructor is also the parser
   static CommandLineOptions parse(QApplication &app) {
@@ -71,6 +72,12 @@ public:
                                          "Device index (int).", "deviceIndex",
                                          "0");
     parser.addOption(deviceIndexOption);
+
+    // --debug-grid  (flag only; no argument)
+    QCommandLineOption debugGridOption(
+        QStringList() << "g" << "debugGrid",
+        "Show a debugging grid with the camera feed, mask, and lensed image.");
+    parser.addOption(debugGridOption);
 
     parser.process(app);
 
@@ -111,6 +118,8 @@ public:
       std::cerr << "Error: --deviceIndex must be an integer.\n";
       std::exit(-1);
     }
+
+    opts.debugGrid = parser.isSet(debugGridOption);
 
     return opts;
   }

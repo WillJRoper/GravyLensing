@@ -74,6 +74,47 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
       {1, 3, fastH_, fastW_},
       torch::TensorOptions().dtype(torch::kFloat32).device(device_));
 
+  // Allocate the FFTW kernels
+  allocateFFTWKernels();
+  allocateFFTWDeflections();
+
+  // Ensure we always have a valid mask and lensed image of the right size
+  latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
+  latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
+}
+
+void LensMask::allocateFFTWKernels() {
+  // Allocate the FFTW buffers for the kernels
+  kernelX_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
+  kernelY_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
+  Kx_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
+                                         (padWidth_ / 2 + 1));
+  Ky_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
+                                         (padWidth_ / 2 + 1));
+
+  // Create FFTW plans (real-to-complex 2D)
+  planKx_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, kernelX_, Kx_ft_,
+                                  FFTW_MEASURE);
+  planKy_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, kernelY_, Ky_ft_,
+                                  FFTW_MEASURE);
+}
+
+void LensMask::freeFFTWKernels() {
+  if (planKx_)
+    fftwf_destroy_plan(planKx_);
+  if (planKy_)
+    fftwf_destroy_plan(planKy_);
+  if (kernelX_)
+    fftwf_free(kernelX_);
+  if (kernelY_)
+    fftwf_free(kernelY_);
+  if (Kx_ft_)
+    fftwf_free(Kx_ft_);
+  if (Ky_ft_)
+    fftwf_free(Ky_ft_);
+}
+
+void LensMask::allocateFFTWDeflections() {
   maskBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
   maskFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
                                           (padWidth_ / 2 + 1));
@@ -95,55 +136,38 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
                                     defYFT_,  // complex input
                                     defYBuf_, // real output
                                     FFTW_MEASURE);
+}
 
-  // Ensure we always have a valid mask and lensed image of the right size
-  latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
-  latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
+void LensMask::freeFFTWDeflections() {
+  if (maskBuf_)
+    fftwf_free(maskBuf_);
+  if (maskFT_)
+    fftwf_free(maskFT_);
+  if (defXFT_)
+    fftwf_free(defXFT_);
+  if (defYFT_)
+    fftwf_free(defYFT_);
+  if (defXBuf_)
+    fftwf_free(defXBuf_);
+  if (defYBuf_)
+    fftwf_free(defYBuf_);
+  if (planMask_)
+    fftwf_destroy_plan(planMask_);
+  if (planDefX_)
+    fftwf_destroy_plan(planDefX_);
+  if (planDefY_)
+    fftwf_destroy_plan(planDefY_);
 }
 
 LensMask::~LensMask() {
-  if (planKx_)
-    fftwf_destroy_plan(planKx_);
-  if (planKy_)
-    fftwf_destroy_plan(planKy_);
-  if (kernelX_)
-    fftwf_free(kernelX_);
-  if (kernelY_)
-    fftwf_free(kernelY_);
-  if (Kx_ft_)
-    fftwf_free(Kx_ft_);
-  if (Ky_ft_)
-    fftwf_free(Ky_ft_);
-  if (cap_.isOpened()) {
-    cap_.release();
-  }
-  if (maskBuf_) {
-    fftwf_free(maskBuf_);
-  }
-  if (maskFT_) {
-    fftwf_free(maskFT_);
-  }
-  if (defXFT_) {
-    fftwf_free(defXFT_);
-  }
-  if (defYFT_) {
-    fftwf_free(defYFT_);
-  }
-  if (defXBuf_) {
-    fftwf_free(defXBuf_);
-  }
-  if (defYBuf_) {
-    fftwf_free(defYBuf_);
-  }
-  if (planMask_) {
-    fftwf_destroy_plan(planMask_);
-  }
-  if (planDefX_) {
-    fftwf_destroy_plan(planDefX_);
-  }
-  if (planDefY_) {
-    fftwf_destroy_plan(planDefY_);
-  }
+  // Free the FFTW plans and buffers
+  freeFFTWKernels();
+
+  // Free the deflection kernels
+  freeFFTWDeflections();
+
+  // Free the input tensor
+  inputTensor_.reset();
 }
 
 // -----------------------
@@ -272,54 +296,54 @@ void LensMask::buildKernels() {
   const int Wc = W / 2 + 1;
   const float norm = 1.0f / (static_cast<float>(H) * W);
 
-  // allocate as before…
-  kernelX_ = (float *)fftwf_malloc(sizeof(float) * N);
-  kernelY_ = (float *)fftwf_malloc(sizeof(float) * N);
-  Kx_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * H * Wc);
-  Ky_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * H * Wc);
+  // Physical (periodic) domain in pixel units
+  const float dx = 1.0f;
+  const float dy = 1.0f;
+  const float physW = W * dx;
+  const float physH = H * dy;
+  const float halfPhysW = physW * 0.5f;
+  const float halfPhysH = physH * 0.5f;
 
-  // compute rcutoff in pixels:
-  //   padWidth_  - width_  = how many extra pixels outside the true image
-  //   padHeight_ - height_ = likewise in Y
-  const float rcutoff_x = static_cast<float>(padWidth_ - width_) * 0.5f;
-  const float rcutoff_y = static_cast<float>(padHeight_ - height_) * 0.5f;
-  const float rcutoff = std::min(rcutoff_x, rcutoff_y);
+  // Cutoff radius (pixels), taper fraction
+  const float padExtraW = static_cast<float>(padWidth_ - width_);
+  const float padExtraH = static_cast<float>(padHeight_ - height_);
+  const float rcutoff = std::min(padExtraW, padExtraH) * 0.5f;
   const float CUTOFF = 0.2f;
-
-  // centre offsets:
-  const float halfW = W * 0.5f;
-  const float halfH = H * 0.5f;
   const float eps2 = softening_ * softening_;
 
+  // Build the real-space kernel with periodic wrap-around and cosine taper
   for (int j = 0; j < H; ++j) {
-    float y = j - halfH;
     for (int i = 0; i < W; ++i) {
-      float x = i - halfW;
-      float r2 = x * x + y * y + eps2;
-      float inv = 1.0f / (static_cast<float>(M_PI) * r2) * norm;
+      // Map into periodic domain
+      float x = (i + 0.5f) * dx;
+      if (x > halfPhysW)
+        x -= physW;
+      float y = (j + 0.5f) * dy;
+      if (y > halfPhysH)
+        y -= physH;
 
-      // apply the smooth cut-off window exactly like gravlens.c:
-      // float r = std::sqrt(x * x + y * y);
-      float fac = 1.0f;
-      // if (r > rcutoff) {
-      //   fac = 0.0f;
-      // } else if (r > CUTOFF * rcutoff) {
-      //   float f = (r - CUTOFF * rcutoff) / ((1.0f - CUTOFF) * rcutoff);
-      //   fac = 0.5f * (std::cos(M_PI * f) + 1.0f);
-      // } else {
-      //   fac = 1.0f;
-      // }
+      float r = std::sqrt(x * x + y * y);
+      float r2 = r * r + eps2;
 
-      kernelX_[j * W + i] = x * inv * fac;
-      kernelY_[j * W + i] = y * inv * fac;
+      // Smooth cutoff window
+      float fac;
+      if (r > rcutoff) {
+        fac = 0.0f;
+      } else if (r > CUTOFF * rcutoff) {
+        float f = (r - CUTOFF * rcutoff) / ((1.0f - CUTOFF) * rcutoff);
+        fac = 0.5f * (std::cos(M_PI * f) + 1.0f);
+      } else {
+        fac = 1.0f;
+      }
+
+      // Base kernel value (includes 1/(H*W) normalization)
+      float base = 1.0f / (static_cast<float>(M_PI) * r2) * norm;
+      kernelX_[j * W + i] = x * base * fac;
+      kernelY_[j * W + i] = y * base * fac;
     }
   }
 
-  // 4) Create FFTW plans (real-to-complex 2D)
-  planKx_ = fftwf_plan_dft_r2c_2d(H, W, kernelX_, Kx_ft_, FFTW_MEASURE);
-  planKy_ = fftwf_plan_dft_r2c_2d(H, W, kernelY_, Ky_ft_, FFTW_MEASURE);
-
-  // 5) Execute the plans to fill Kx_ft_ and Ky_ft_
+  // Execute the plans to fill Kx_ft_ and Ky_ft_
   fftwf_execute(planKx_);
   fftwf_execute(planKy_);
 }
@@ -421,7 +445,7 @@ void LensMask::applyLensing(const cv::Mat &background) {
   {
     std::lock_guard lk(lensedMutex_);
     cv::remap(background, latestLensed_, mapX, mapY, cv::INTER_LINEAR,
-              cv::BORDER_REFLECT // reflect-fill rather than constant-black
+              cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0) // black border
     );
 
     // Flag that we have a new lensed image
@@ -480,51 +504,19 @@ void LensMask::updateGeometry(int width, int height) {
   fastW_ = width_ / maskScale_;
   fastH_ = height_ / maskScale_;
 
-  // Rebuild the kernels
-  if (kernelX_) {
-    fftwf_destroy_plan(planKx_);
-    fftwf_destroy_plan(planKy_);
-    fftwf_free(kernelX_);
-    fftwf_free(kernelY_);
-    fftwf_free(Kx_ft_);
-    fftwf_free(Ky_ft_);
-  }
-  kernelX_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
-  kernelY_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
-  Kx_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
-                                         (padWidth_ / 2 + 1));
-  Ky_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
-                                         (padWidth_ / 2 + 1));
-  planKx_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, kernelX_, Kx_ft_,
-                                  FFTW_MEASURE);
-  planKy_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, kernelY_, Ky_ft_,
-                                  FFTW_MEASURE);
+  // We need to reallocate the FFTW plans and buffers for the kernels and then
+  // rebuild everything
 
-  // Rebuild the FFTW plans for the mask and deflection kernels
-  fftwf_destroy_plan(planMask_);
-  fftwf_destroy_plan(planDefX_);
-  fftwf_destroy_plan(planDefY_);
-  fftwf_free(maskBuf_);
-  fftwf_free(maskFT_);
-  fftwf_free(defXFT_);
-  fftwf_free(defYFT_);
-  fftwf_free(defXBuf_);
-  fftwf_free(defYBuf_);
-  maskBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
-  maskFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
-                                          (padWidth_ / 2 + 1));
-  defXFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
-                                          (padWidth_ / 2 + 1));
-  defYFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
-                                          (padWidth_ / 2 + 1));
-  defXBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
-  defYBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
-  planMask_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, maskBuf_, maskFT_,
-                                    FFTW_MEASURE);
-  planDefX_ = fftwf_plan_dft_c2r_2d(padHeight_, padWidth_, defXFT_, defXBuf_,
-                                    FFTW_MEASURE);
-  planDefY_ = fftwf_plan_dft_c2r_2d(padHeight_, padWidth_, defYFT_, defYBuf_,
-                                    FFTW_MEASURE);
+  // Free all the FFTW plans and buffers
+  freeFFTWKernels();
+  freeFFTWDeflections();
+
+  // And reallocate the FFTW plans and buffers for the kernels
+  allocateFFTWKernels();
+  allocateFFTWDeflections();
+
+  // Rebuild the kernels now we've redone all our allocations
+  buildKernels();
 
   // Rebuild the segmentation model input tensor
   inputTensor_ = torch::empty(
@@ -542,9 +534,6 @@ void LensMask::updateGeometry(int width, int height) {
   // Rebuild the mask and lensed images
   latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
   latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
-
-  // Rebuild the kernels now we've redone all our allocations
-  buildKernels();
 
   // Update the camera feed
   camFeed_->updateGeometry(width_, height_);

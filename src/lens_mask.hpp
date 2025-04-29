@@ -154,4 +154,16 @@ private:
   fftwf_plan planMask_; // r2c on maskBuf_
   fftwf_plan planDefX_; // c2r for defXBuf_
   fftwf_plan planDefY_; // c2r for defYBuf_
+
+  // Allocate the FFTW plans and buffers for the kernels
+  void allocateFFTWKernels();
+
+  // Free the FFTW plans and buffers for the kernels
+  void freeFFTWKernels();
+
+  // Allocate the FFTW plans and buffers for the deflections
+  void allocateFFTWDeflections();
+
+  // Free the FFTW plans and buffers for the deflections
+  void freeFFTWDeflections();
 };

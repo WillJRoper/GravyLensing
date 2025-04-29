@@ -83,13 +83,28 @@ int main(int argc, char **argv) {
 
   // Set up ViewPort
   ViewPort vp;
+
+  // Set the title of the window
   vp.setWindowTitle("GravyLensing Demo");
+
+  // Attach pointers to the lens and backgrounds (we'll need them for
+  // key press interactions: switching background etc.)
   vp.setLens(&lens);
   vp.setBackgroundImages(&backgrounds);
+
+  // Set the initial image to the first background
   vp.setBackground(backgrounds.current());
-  // vp.showGridView();
-  vp.showLensedView();
-  vp.show(); // show the main window
+
+  // Are we using the debug view or the "production" view with only the lensed
+  // image?
+  if (opts.debugGrid) {
+    vp.showGridView();
+  } else {
+    vp.showLensedView();
+  }
+
+  // Show the main window
+  vp.show();
 
   // We'll do the detection on a separate thread, so start it now
   lens.startAsyncSegmentation();
