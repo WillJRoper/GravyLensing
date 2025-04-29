@@ -53,6 +53,7 @@ int main(int argc, char **argv) {
   int maskScale = opts.maskScale;
   int deviceIndex = opts.deviceIndex;
   int padFactor = opts.padFactor;
+  bool debugGrid = opts.debugGrid;
   const std::string modelPath = opts.modelPath;
 
   // Use threaded FFTW
@@ -121,7 +122,7 @@ int main(int argc, char **argv) {
     // Update viewport images
     vp.setImage(camFeed->latestFrame_);
     vp.setLens(lens.latestLensed_);
-    if (opts.debugGrid) {
+    if (debugGrid) {
       vp.setMask(lens.latestMask_);
       vp.setBackground(backgrounds.current());
     }
