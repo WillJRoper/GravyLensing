@@ -120,12 +120,10 @@ int main(int argc, char **argv) {
 
     // Update viewport images
     vp.setImage(camFeed->latestFrame_);
-    if (lens.newLensedImageReady_) {
-      vp.setLens(lens.latestLensed_);
-      if (opts.debugGrid) {
-        vp.setMask(lens.latestMask_);
-        vp.setBackground(backgrounds.current());
-      }
+    vp.setLens(lens.latestLensed_);
+    if (opts.debugGrid) {
+      vp.setMask(lens.latestMask_);
+      vp.setBackground(backgrounds.current());
     }
   });
   frameTimer->start(1000 / 60); // ~60 fps

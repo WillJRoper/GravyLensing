@@ -368,12 +368,11 @@ void LensMask::buildKernels() {
 // Apply Lensing
 // -----------------------
 void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
-  // 1) FFTW mutex and quick-out if no new mask
-  std::lock_guard lk(fftwDeflectionMutex_);
+  // No new mask? Then nothing to do
   if (!newMaskReady_)
     return;
 
-  // 2) Grab a local copy of the mask under its own lock
+  // Grab a local copy of the mask under its own lock
   cv::Mat maskCopy;
   {
     std::lock_guard lk(maskMutex_);
@@ -383,14 +382,14 @@ void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
     newMaskReady_ = false;
   }
 
-  // 3) Dimensions
+  // Dimensions
   const int H = height_;
   const int W = width_;
   const int pH = padHeight_;
   const int pW = padWidth_;
   const int pWC = pW / 2 + 1;
 
-  // 4) Direct‐fill maskBuf_ with padded 0/1 mask using REFLECT padding
+  // Direct‐fill maskBuf_ with padded 0/1 mask using REFLECT padding
   {
     const int top = (pH - H) / 2;
     const int left = (pW - W) / 2;
@@ -416,10 +415,10 @@ void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
     }
   }
 
-  // 5) FFT forward of mask
+  // FFT forward of mask
   fftwf_execute(planMask_);
 
-  // 6) Multiply in Fourier space (X and Y deflections)
+  // Multiply in Fourier space (X and Y deflections)
   {
     const int end = pH * pWC;
 #pragma omp parallel for num_threads(nthreads - 1)
@@ -435,11 +434,11 @@ void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
     }
   }
 
-  // 7) Inverse FFT → defXBuf_, defYBuf_
+  // Inverse FFT → defXBuf_, defYBuf_
   fftwf_execute(planDefX_);
   fftwf_execute(planDefY_);
 
-  // 8) Build remap arrays in one vectorizable loop
+  // Build remap arrays in one vectorizable loop
   {
     const int offY = (pH - H) / 2, offX = (pW - W) / 2;
     const int HW = H * W;
@@ -463,13 +462,9 @@ void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
     }
   }
 
-  // 9) Final remap under lensedMutex_
-  {
-    std::lock_guard lk(lensedMutex_);
-    cv::remap(background, latestLensed_, mapX_, mapY_, cv::INTER_LINEAR,
-              cv::BORDER_REFLECT);
-    newLensedImageReady_ = true;
-  }
+  // Final remap under lensedMutex_
+  cv::remap(background, latestLensed_, mapX_, mapY_, cv::INTER_LINEAR,
+            cv::BORDER_REFLECT);
 }
 
 void LensMask::startAsyncSegmentation() {

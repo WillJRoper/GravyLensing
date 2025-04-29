@@ -58,9 +58,6 @@ public:
   // Create a flag for whether there is a new mask to show
   std::atomic<bool> newMaskReady_{false};
 
-  // Create a flag for whether there is a new lensed image to show
-  std::atomic<bool> newLensedImageReady_{false};
-
   // The latest mask computed
   cv::Mat latestMask_;
   std::mutex maskMutex_; // guards latestMask_
