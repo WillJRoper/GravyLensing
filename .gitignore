@@ -33,3 +33,6 @@
 
 # Apple sepcific files 
 *.DS_Store
+
+# Ignore the build directory 
+build/
