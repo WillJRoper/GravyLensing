@@ -36,3 +36,9 @@
 
 # Ignore the build directory 
 build/
+
+# Pytorch models 
+*.pt
+
+# Ignore the executable 
+gravy_lens
