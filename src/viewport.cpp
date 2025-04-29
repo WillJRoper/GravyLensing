@@ -11,20 +11,19 @@
 
 static QImage MatToQImage(const cv::Mat &mat) {
   switch (mat.type()) {
-  case CV_8UC3: {
-    // BGR → RGB
-    QImage img(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_BGR888);
-    return img.copy();
-  }
-  case CV_8UC1: {
-    QImage img(mat.data, mat.cols, mat.rows, mat.step,
-               QImage::Format_Grayscale8);
-    return img.copy();
-  }
-  case CV_8UC4: {
-    QImage img(mat.data, mat.cols, mat.rows, mat.step, QImage::Format_ARGB32);
-    return img.copy();
-  }
+  case CV_8UC3:
+    // BGR888 exists in Qt6; no need to rgbSwap or copy
+    return QImage(mat.data, mat.cols, mat.rows, int(mat.step),
+                  QImage::Format_BGR888);
+
+  case CV_8UC1:
+    return QImage(mat.data, mat.cols, mat.rows, int(mat.step),
+                  QImage::Format_Grayscale8);
+
+  case CV_8UC4:
+    return QImage(mat.data, mat.cols, mat.rows, int(mat.step),
+                  QImage::Format_ARGB32);
+
   default:
     return QImage();
   }
@@ -47,28 +46,46 @@ ViewPort::ViewPort(QWidget *parent)
 ViewPort::~ViewPort() = default;
 
 void ViewPort::setImage(const cv::Mat &image) {
-  image_ = image.clone();
-  auto qi = MatToQImage(image_);
+  // 1) shallow‐copy header only (no pixel data copy)
+  image_ = image;
+
+  // 2) wrap image_.data in a QImage—no deep copy
+  QImage qi = MatToQImage(image_);
+
+  // 3) QPixmap::fromImage does the one necessary copy into the widget
   imageLabel_->setPixmap(QPixmap::fromImage(qi));
 }
 
 void ViewPort::setBackground(const cv::Mat &background) {
-  background_ = background.clone();
-  auto qi = MatToQImage(background_);
+  // shallow‐copy header only
+  background_ = background;
+
+  // wrap without copying
+  QImage qi = MatToQImage(background_);
+
+  // single copy into the widget's pixmap
   backgroundLabel_->setPixmap(QPixmap::fromImage(qi));
 }
 
 void ViewPort::setLens(const cv::Mat &lens) {
-  lens_ = lens.clone();
-  auto qi = MatToQImage(lens_);
+  // shallow‐copy header only
+  lens_ = lens;
+
+  // wrap without copying
+  QImage qi = MatToQImage(lens_);
+
+  // single copy into the widget's pixmap
   lensLabel_->setPixmap(QPixmap::fromImage(qi));
 }
 
 void ViewPort::setMask(const cv::Mat &mask) {
-  // mask is binary CV_8UC1; colorize to RGB red mask if you like, or show as
-  // gray
-  mask_ = mask.clone();
-  auto qi = MatToQImage(mask_);
+  // shallow‐copy header only
+  mask_ = mask;
+
+  // If you want a red overlay you could convert here,
+  // but to keep it zero‐copy just display it directly:
+  QImage qi = MatToQImage(mask_);
+
   maskLabel_->setPixmap(QPixmap::fromImage(qi));
 }
 

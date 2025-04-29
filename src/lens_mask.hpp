@@ -23,7 +23,14 @@
 
 #include <fftw3.h>
 #include <opencv2/opencv.hpp>
+#if defined(slots)
+#pragma push_macro("slots")
+#undef slots
+#endif
 #include <torch/script.h>
+#if defined(slots)
+#pragma pop_macro("slots")
+#endif
 #include <vector>
 
 /**

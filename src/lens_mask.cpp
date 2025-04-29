@@ -28,8 +28,15 @@
 #include <iostream>
 #include <omp.h>
 #include <opencv2/imgproc.hpp> // for cv::cvtColor, cv::compare, etc.
-#include <torch/script.h>      // for torch::jit::script::Module
-#include <torch/torch.h>       // for torch::cuda::is_available, tensor ops
+#if defined(slots)
+#pragma push_macro("slots")
+#undef slots
+#endif
+#include <torch/script.h> // for torch::jit::script::Module
+#include <torch/torch.h>  // for torch::cuda::is_available, tensor ops
+#if defined(slots)
+#pragma pop_macro("slots")
+#endif
 
 // -----------------------
 // Constructor / Destructor

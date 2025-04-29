@@ -23,6 +23,7 @@
 // Standard includes
 #include <QApplication>
 #include <QCoreApplication>
+#include <QTimer>
 #include <fftw3.h>
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -106,42 +107,36 @@ int main(int argc, char **argv) {
   // We'll do the detection on a separate thread, so start it now
   lens.startAsyncSegmentation();
 
-  // Main capture+render loop
-  while (vp.isVisible()) {
-    // Capture a new frame
+  // Use QTimer to drive capture
+  QTimer *frameTimer = new QTimer(&vp);
+  QObject::connect(frameTimer, &QTimer::timeout, [&]() {
+    // Capture frame
     if (!camFeed->captureFrame()) {
-      std::cerr << "Webcam frame failed, exiting.\n";
-      break;
+      qWarning("Camera frame failed, stopping timer.");
+      frameTimer->stop();
+      return;
     }
 
-    // Segment & lens
+    // Apply lensing
     lens.applyLensing(backgrounds.current(), nthreads);
 
-    // Update the new lensed image (we always need to do this regardless of
-    // whether we are debugging or not)
+    // Update viewport images
+    vp.setImage(camFeed->latestFrame_);
     if (lens.newLensedImageReady_) {
-      std::lock_guard lk(lens.lensedMutex_);
       vp.setLens(lens.latestLensed_);
-    }
-
-    // Update the rest of the view port if we are in debug mode
-    if (opts.debugGrid) {
-      {
-        std::lock_guard lk(camFeed->frameMutex_);
-        vp.setImage(camFeed->latestFrame_); // top-left
-      }
-
-      {
-        std::lock_guard lk(lens.maskMutex_);
-        vp.setMask(lens.latestMask_); // top-right
+      if (opts.debugGrid) {
+        vp.setMask(lens.latestMask_);
+        vp.setBackground(backgrounds.current());
       }
     }
+  });
+  frameTimer->start(1000 / 60); // ~60 fps
 
-    // Process Qt events (gives you windowing, input, etc.)
-    QCoreApplication::processEvents();
-  }
+  // Enter Qt event loop
+  int ret = app.exec();
 
-  // Stop the segmentation thread
+  // Clean up
+  frameTimer->stop();
   lens.stopAsyncSegmentation();
 
   return 0;

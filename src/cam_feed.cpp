@@ -79,25 +79,24 @@ bool CameraFeed::captureFrame() {
   // Try and grab a new frame with the lock
   {
     std::lock_guard<std::mutex> lock(frameMutex_);
-    if (newFrameReady_) {
-      // Already have a new frame, no need to capture again
-      return true;
-    }
 
-    // Clear the latest frame
-    latestFrame_.release();
-
-    // Read a new frame
-    if (!cap_.read(latestFrame_)) {
-      std::cerr << "Failed to read frame from camera\n";
+    // grab() just queues the next frame; cheaper than read()
+    if (!cap_.grab()) {
+      std::cerr << "Failed to grab frame\n";
       return false;
     }
 
-    // Mark the new frame as ready
-    newFrameReady_ = true;
+    // retrieve() writes directly into your pre-allocated Mat
+    if (!cap_.retrieve(latestFrame_)) {
+      std::cerr << "Failed to retrieve frame\n";
+      return false;
+    }
 
     // Mirror it horizontally so on-screen motion matches real motion
     cv::flip(latestFrame_, latestFrame_, /*flipCode=*/1);
+
+    // Mark it ready
+    newFrameReady_.store(true, std::memory_order_release);
   }
 
   // No we are unlocked and have everything we need the rest of the code can
