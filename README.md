@@ -1,4 +1,4 @@
-# gravy-lensing
+# GravyLensing
 
 A real-time gravitational lensing demo application written in C++.
 
@@ -65,7 +65,7 @@ Install via your package manager (assuming you need everything):
 
 For libtorch, see their [installation instructions](https://pytorch.org/). You will need to pass the location of libtorch at configuration time (as shown next).
 
-3. **Build with CMake**
+## Build with CMake
 
    To build the release build:
 
@@ -88,11 +88,11 @@ For libtorch, see their [installation instructions](https://pytorch.org/). You w
 
    The executable `gravy_lens` will then be placed in the project root.
 
-4. **Export segmentation models for C++**
+## Generating Segementation models
 
-We provide a unified Python script, `get_models.py` (in the `models/` directory), to generate high-performance TorchScript or ONNX artifacts for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
+Before running GravyLensing you will need some segmentation models to detect people in the frame. We provide a unified Python script, `get_models.py` (in the `models/` directory), to generate TorchScript or ONNX artifacts for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
 
-NOTE: ONNX is not yet supported in the C++ app but will be soon.
+NOTE: ONNX is not yet supported in the C++ app but will be.
 
 **Install prerequisites**
 
@@ -147,8 +147,6 @@ python get_models.py \
   --device cuda
 ```
 
-Place the resulting file under `models/` (the default), or pass its path to your executable via `--modelPath`.
-
 ## Usage
 
 ```bash
@@ -164,13 +162,13 @@ Place the resulting file under `models/` (the default), or pass its path to your
 ```
 
 - Place background images (up to 10) in the `backgrounds/` directory.
-- Use left/right arrow keys in the GUI to cycle through backgrounds.
-- Press `g` at launch (`--debugGrid`) to see the debug view.
-- Press `q` or close the window to exit.
+- Use 0-9 keys to cycle through backgrounds.
+- Press `g` at launch (`--debugGrid`) to see the debug view
+- Press `ESC` or close the window to exit.
 
 ## Python Example
 
-A self-contained Python demo is provided in `python_example.py`. To run:
+A simple self-contained Python demo is provided in `python_example.py`. This example implements some of the functionality of the C++ but with all the performance baggage you'd expect from Python. To run:
 
 ```bash
 pip install torch torchvision opencv-python numpy
@@ -183,25 +181,6 @@ This script:
 2. Loads a background TIFF (update the `bg_path` variable).
 3. Uses the same DeepLabV3 model for segmentation.
 4. Applies half-resolution FFT lensing and displays the result.
-
-## Project Structure
-
-```
-gravy-lensing/
-├─ backgrounds/          # default folder for background images
-├─ models/               # save your segmentation .pt model here
-├─ src/                  # C++ source files
-│  ├─ main.cpp
-│  ├─ cmd_parser.hpp
-│  ├─ backgrounds.hpp/.cpp
-│  ├─ cam_feed.hpp/.cpp
-│  ├─ lens_mask.hpp/.cpp
-│  └─ viewport.hpp/.cpp
-├─ CMakeLists.txt        # build configuration
-├─ python_example.py     # Python demo script
-├─ LICENSE               # GPL-3.0
-└─ README.md             # this file
-```
 
 ## Contributing
 
