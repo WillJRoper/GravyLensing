@@ -89,32 +89,23 @@ For libtorch, see their [installation instructions](https://pytorch.org/). You w
 
 4. **Export segmentation models for C++**
 
-We provide a unified Python script, `get_models.py` (in the `models/` directory), to generate high-performance TorchScript or ONNX artifacts for the C++ inference pipeline. It supports three backbones—DeepLabV3, LR-ASPP, and BiSeNet—and four export formats.
+We provide a unified Python script, `get_models.py` (in the `models/` directory), to generate high-performance TorchScript or ONNX artifacts for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
+
+   NOTE: ONNX is not yet supported in the C++ app but will be soon.
 
 **Install prerequisites**
 
 To run this script you'll need to have some PyTorch packages installed.
 
 ```bash
-pip install torch torchvision torch-bisenet
-```
-
-For BiSeNet you also need to clone the repo and install it.
-
-**Optional: BiSeNet**
-
-```bash
-git clone https://github.com/CoinCheung/BiSeNet.git
-cd BiSeNet
-pip install -e .
-cd ..
+pip install torch torchvision
 ```
 
 **Usage**
 
 ```bash
 python get_models.py \
-  --model <deeplab|lraspp|bisenet> \
+  --model <deeplab|lraspp> \
   --format <torchscript-scripted|torchscript-traced|quantized|onnx> \
   [--device cpu|cuda] [--width W] [--height H]
 ```
@@ -122,7 +113,6 @@ python get_models.py \
 - `--model`
   - `deeplab` DeepLabV3 MobileNetV3 Large
   - `lraspp` LR-ASPP MobileNetV3 Large
-  - `bisenet` BiSeNet V2 (requires `torch-bisenet`)
 - `--format`
   - `torchscript-scripted` uses `torch.jit.script(…)`
   - `torchscript-traced` uses `torch.jit.trace(…)` with a fixed dummy shape
