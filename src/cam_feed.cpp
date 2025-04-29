@@ -50,6 +50,18 @@ CameraFeed::CameraFeed(int deviceIndex, int width, int height)
 }
 
 /**
+ * @brief Destructor for CameraFeed.
+ *
+ * Closes the camera if it is open.
+ */
+CameraFeed::~CameraFeed() {
+  // Release the camera
+  if (cap_.isOpened()) {
+    cap_.release();
+  }
+}
+
+/**
  * @brief Capture a frame from the camera.
  *
  * @param frame  Output BGR image
