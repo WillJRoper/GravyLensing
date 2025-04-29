@@ -37,6 +37,7 @@ public:
   int deviceIndex;
   bool debugGrid;
   int padFactor;
+  std::string modelPath;
 
   // Constructor is also the parser
   static CommandLineOptions parse(QApplication &app) {
@@ -86,6 +87,13 @@ public:
                                        "padFactor", "2");
     parser.addOption(padFactorOption);
 
+    // --model-path <string> (default "models/deeplabv3_mobilenet_v3_large.pt")
+    QCommandLineOption modelPathOption(
+        QStringList() << "mp" << "modelPath",
+        "Path to the segmentation model (string).", "modelPath",
+        "models/deeplabv3_mobilenet_v3_large.pt");
+    parser.addOption(modelPathOption);
+
     parser.process(app);
 
     // Validate required --nthreads
@@ -131,6 +139,12 @@ public:
     opts.padFactor = parser.value(padFactorOption).toInt(&ok);
     if (!ok) {
       std::cerr << "Error: --padFactor must be a float.\n";
+      std::exit(-1);
+    }
+
+    opts.modelPath = parser.value(modelPathOption).toStdString();
+    if (opts.modelPath.empty()) {
+      std::cerr << "Error: --modelPath must be a non-empty string.\n";
       std::exit(-1);
     }
 
