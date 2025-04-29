@@ -31,18 +31,18 @@ A real-time gravitational lensing demo application written in C++.
 
 ## Installation
 
-1. **Clone the repository**
+### Clone the repository
 
-   ```bash
-   git clone https://github.com/WillJRoper/gravy-lensing.git
-   cd gravy-lensing
-   ```
+```bash
+git clone https://github.com/WillJRoper/gravy-lensing.git
+cd gravy-lensing
+```
 
-2. **Prepare system dependencies**
+### Dependencies
 
-   Install via your package manager (assuming you need everything):
+Install via your package manager (assuming you need everything):
 
-### Linux (Ubuntu/Debian)
+#### Linux (Ubuntu/Debian)
 
 - Install via:
   ```bash
@@ -50,7 +50,7 @@ A real-time gravitational lensing demo application written in C++.
   sudo apt install cmake build-essential libfftw3-dev libfftw3-single3 libopencv-dev qt6-base-dev python3 python3-venv python3-pip
   ```
 
-### macOS (Homebrew)
+#### macOS (Homebrew)
 
 - Install via:
 
@@ -61,7 +61,7 @@ A real-time gravitational lensing demo application written in C++.
 
   If FFTW3 is installed in non-standard locations, you will need to set `FFTW3_ROOT` during configuration.
 
-### Installing libtorch
+#### Installing libtorch
 
 For libtorch, see their [installation instructions](https://pytorch.org/). You will need to pass the location of libtorch at configuration time (as shown next).
 
