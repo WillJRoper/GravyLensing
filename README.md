@@ -2,6 +2,10 @@
 
 A real-time gravitational lensing demo application written in C++.
 
+Here is an example of the debug mode showing the mask overlaying me awkwardly sat at my desk along with the lensed and unlensed background.
+
+![SCR-20250429-qemj](https://github.com/user-attachments/assets/39f96883-53b8-4d13-b399-3d390bf4328f)
+
 ## Features
 
 - **Live camera input**: Captures webcam feed and segments the person in real time.
