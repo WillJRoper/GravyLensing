@@ -91,7 +91,7 @@ public:
     QCommandLineOption modelPathOption(
         QStringList() << "mp" << "modelPath",
         "Path to the segmentation model (string).", "modelPath",
-        "models/deeplabv3_mobilenet_v3_large.pt");
+        "models/deeplab_quantized_model.pt");
     parser.addOption(modelPathOption);
 
     parser.process(app);
