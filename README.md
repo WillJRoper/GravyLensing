@@ -7,10 +7,15 @@ A real-time gravitational lensing demo application written in C++.
 - **Live camera input**: Captures webcam feed and segments the person in real time.
 - **Gravitational lens effect**: Applies FFT-based deflection to background images based on person mask.
 - **Multi-threaded**: Uses OpenMP and FFTW3 threaded plans for high performance.
-- **Qt6 GUI**: Displays either lensed output or debug grid with mask, background, and camera feed.
-- **Segmentation model**: Uses a TorchScript-exported DeepLabV3 MobileNet V3 model for person mask extraction.
+- **Qt6 GUI**: Displays the lensed output using Qt6 (with an optional debugging view).
+- **Segmentation model**: Uses a TorchScript-exported models for person mask extraction.
 - **Background cycling**: Load up to 10 images from `backgrounds/` and switch via key presses.
-- **Python example**: Standalone script (`python_example.py`) demonstrating the lens effect in Python.
+
+## TODO:
+
+- Optimise segementation step to remove bottleneck and smooth out small scale variations.
+- Enable turning on and off of "lens" feed (i.e. the person) in output video feed.
+- Utilise GPUs when available.
 
 ## Prerequisites
 
@@ -21,7 +26,7 @@ A real-time gravitational lensing demo application written in C++.
 - **Qt6** (Widgets)
 - **libtorch** (PyTorch C++ API)
 - **Threads** (C++ std threads)
-- **Python 3.8+** (for the example script)
+- **Python 3.8+** (for the example script and model generation)
 
 ## Installation
 
@@ -34,51 +39,124 @@ A real-time gravitational lensing demo application written in C++.
 
 2. **Prepare system dependencies**
 
-   Install via your package manager (example for Ubuntu/Debian):
-   ```bash
-   sudo apt update
-   sudo apt install cmake build-essential libfftw3-dev libfftw3-single3 libopencv-dev qt6-base-dev libtorch-dev
-   ```
+   Install via your package manager (assuming you need everything):
 
-   - If FFTW3 or libtorch are installed in non-standard locations, set `FFTW3_ROOT` or `Torch_DIR` when invoking CMake.
+### Linux (Ubuntu/Debian)
+
+- Install via:
+  ```bash
+  sudo apt update
+  sudo apt install cmake build-essential libfftw3-dev libfftw3-single3 libopencv-dev qt6-base-dev python3 python3-venv python3-pip
+  ```
+
+### macOS (Homebrew)
+
+- Install via:
+
+  ```bash
+  brew update
+  brew install cmake fftw opencv qt python@3.9
+  ```
+
+  If FFTW3 is installed in non-standard locations, you will need to set `FFTW3_ROOT` during configuration.
+
+### Installing libtorch
+
+For libtorch, see their [installation instructions](https://pytorch.org/). You will need to pass the location of libtorch at configuration time (as shown next).
 
 3. **Build with CMake**
 
+   To build the release build:
+
    ```bash
-   mkdir build
-   cd build
-   cmake .. \
-     -DFFTW3_ROOT=/path/to/fftw3 \
-     -DCMAKE_PREFIX_PATH="/path/to/libtorch;/path/to/Qt6/lib/cmake" \
+   cmake -B build \
+     -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
      -DCMAKE_BUILD_TYPE=Release
-   cmake --build . --config Release -- -j$(nproc)
+   cmake --build build --config Release -- -j$(nproc)
    ```
 
-   The executable `gravy_lens` will be placed in the project root.
+   Note that you may need to point directly to FFTW if it is installed in a nonstandard location:
 
-4. **Export the segmentation model**
-
-   Create a TorchScript file from the pretrained DeepLabV3 MobileNet V3 model:
-
-   ```python
-   import torch
-   from torchvision.models.segmentation import (
-       deeplabv3_mobilenet_v3_large,
-       DeepLabV3_MobileNet_V3_Large_Weights
-   )
-
-   # Load pretrained model
-   model = deeplabv3_mobilenet_v3_large(
-       weights=DeepLabV3_MobileNet_V3_Large_Weights.DEFAULT
-   )
-   model.eval()
-
-   # Script and save
-   scripted = torch.jit.script(model)
-   scripted.save("models/deeplabv3_mobilenet_v3_large.pt")
+   ```bash
+   cmake -B build \
+     -DFFTW3_ROOT=/path/to/fftw3 \
+     -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
+     -DCMAKE_BUILD_TYPE=Release
+   cmake --build build --config Release -- -j$(nproc)
    ```
 
-   Ensure the resulting `.pt` file is placed in a `models/` directory relative to the executable, or provide its path via `--modelPath`.
+   The executable `gravy_lens` will then be placed in the project root.
+
+4. **Export segmentation models for C++**
+
+We provide a unified Python script, `get_models.py` (in the `models/` directory), to generate high-performance TorchScript or ONNX artifacts for the C++ inference pipeline. It supports three backbones—DeepLabV3, LR-ASPP, and BiSeNet—and four export formats.
+
+**Install prerequisites**
+
+To run this script you'll need to have some PyTorch packages installed.
+
+```bash
+pip install torch torchvision torch-bisenet
+```
+
+For BiSeNet you also need to clone the repo and install it.
+
+**Optional: BiSeNet**
+
+```bash
+git clone https://github.com/CoinCheung/BiSeNet.git
+cd BiSeNet
+pip install -e .
+cd ..
+```
+
+**Usage**
+
+```bash
+python get_models.py \
+  --model <deeplab|lraspp|bisenet> \
+  --format <torchscript-scripted|torchscript-traced|quantized|onnx> \
+  [--device cpu|cuda] [--width W] [--height H]
+```
+
+- `--model`
+  - `deeplab` DeepLabV3 MobileNetV3 Large
+  - `lraspp` LR-ASPP MobileNetV3 Large
+  - `bisenet` BiSeNet V2 (requires `torch-bisenet`)
+- `--format`
+  - `torchscript-scripted` uses `torch.jit.script(…)`
+  - `torchscript-traced` uses `torch.jit.trace(…)` with a fixed dummy shape
+  - `quantized` dynamic int8 quantization + scripted export (best CPU latency)
+  - `onnx` ONNX opset 14 with dynamic axes (batch, height, width)
+- `--device` (default `cpu`) load the model on CPU or GPU
+- `--width`, `--height` (dummy input spatial size; default `320×320`)
+
+**Output**  
+The script always writes to:
+
+```
+models/<model>_model.<ext>
+```
+
+- `.pt` for TorchScript formats
+- `.onnx` for the ONNX export
+
+**Example**
+
+```bash
+# Generate a quantized LR-ASPP model for fastest CPU inference
+python get_models.py \
+  --model lraspp \
+  --format quantized
+
+# Generate a traced DeepLabV3 model on GPU
+python get_models.py \
+  --model deeplab \
+  --format torchscript-traced \
+  --device cuda
+```
+
+Place the resulting file under `models/` (the default), or pass its path to your executable via `--modelPath`.
 
 ## Usage
 
@@ -109,6 +187,7 @@ python python_example.py
 ```
 
 This script:
+
 1. Captures your webcam (`cv2.VideoCapture(0)`).
 2. Loads a background TIFF (update the `bg_path` variable).
 3. Uses the same DeepLabV3 model for segmentation.
@@ -140,4 +219,3 @@ Contributions, issues, and feature requests are welcome! Please fork the reposit
 ## License
 
 This project is licensed under the GNU GPL-3.0 License. See [LICENSE](LICENSE) for details.
-
