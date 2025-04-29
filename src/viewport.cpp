@@ -110,9 +110,42 @@ void ViewPort::showGridView() {
 }
 
 void ViewPort::keyPressEvent(QKeyEvent *event) {
-  if (event->key() == Qt::Key_Escape) {
+  int k = event->key();
+
+  // Exit condition
+  if (k == Qt::Key_Escape) {
     close(); // this will make isVisible() return false
-  } else {
+
+  }
+
+  // Background swapping
+  else if (k >= Qt::Key_0 && k <= Qt::Key_9) {
+    // Map '0'..'9' → 0..9
+    size_t idx = static_cast<size_t>(k - Qt::Key_0);
+
+    // If we don't have a background object, bail!
+    if (!backgrounds_) {
+      std::cerr << "No background attached to viewport." << std::endl;
+      std::exit(EXIT_FAILURE);
+    }
+
+    // Cool, we have what we expect. Switch background (this will also
+    // remap the lens and camera feed to the background dimensions)
+    if (backgrounds_->setIndex(idx)) {
+      setBackground(backgrounds_->current());
+      lensObj_->updateGeometry(backgrounds_->cols(), backgrounds_->rows());
+    }
+
+    // Bad things have happened...
+    else {
+      std::cerr << "No background loaded at index " << idx << "; only have "
+                << backgrounds_->size() << " images." << std::endl;
+      std::cerr << "Press '0'..'9' to switch backgrounds." << std::endl;
+    }
+  }
+
+  // Let Qt handle anything else (arrows, function keys, etc.)
+  else {
     QMainWindow::keyPressEvent(event);
   }
 }

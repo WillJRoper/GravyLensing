@@ -19,9 +19,15 @@
 
 #pragma once
 
+// Standard includes
 #include <opencv2/opencv.hpp>
 #include <qtwidgets/QLabel>
 #include <qtwidgets/QMainWindow>
+
+// Local includes
+#include "backgrounds.hpp"
+#include "cam_feed.hpp"
+#include "lens_mask.hpp"
 
 class ViewPort : public QMainWindow {
   Q_OBJECT
@@ -40,6 +46,14 @@ public:
   /// Display 2×2 grid: input frame, mask, overlay, lensed background
   void showGridView();
 
+  // Set the background images
+  void setBackgroundImages(Backgrounds *backgrounds) {
+    backgrounds_ = backgrounds;
+  }
+
+  // Set the lens
+  void setLens(LensMask *lens) { lensObj_ = lens; }
+
 protected:
   // catch key presses
   void keyPressEvent(QKeyEvent *event) override;
@@ -54,4 +68,10 @@ private:
   cv::Mat background_;
   cv::Mat lens_;
   cv::Mat mask_;
+
+  // Pointer to all the available background images
+  Backgrounds *backgrounds_{nullptr};
+
+  // Pointer to the lens
+  LensMask *lensObj_{nullptr};
 };

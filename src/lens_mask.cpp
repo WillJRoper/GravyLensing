@@ -40,6 +40,10 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
       width_(camFeed->width_), height_(camFeed->height_),
       // Set the parameters for the lensing effect
       softening_(softening), strength_(strength), maskScale_(maskScale),
+      // The torch model path
+      modelPath_(modelPath),
+      // The padding factor for the FFT
+      padFactor_(padFactor),
       // Pick device at construction time:
       device_(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU) {
 
@@ -452,4 +456,96 @@ void LensMask::segmentationLoop() {
     // Small pause to yield CPU
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
+}
+
+/**
+ * @brief Update the geometry of the lens.
+ *
+ * This will also free and reallocate all the FFTW plans and buffers, to
+ * account for the new dimensions.
+ *
+ * @param width  New width of the lens
+ * @param height  New height of the lens
+ */
+void LensMask::updateGeometry(int width, int height) {
+  // Update the lens geometry
+  width_ = width;
+  height_ = height;
+
+  // Update the padded dimensions
+  padWidth_ = width_ * padFactor_;
+  padHeight_ = height_ * padFactor_;
+
+  // Update the fast dimensions
+  fastW_ = width_ / maskScale_;
+  fastH_ = height_ / maskScale_;
+
+  // Rebuild the kernels
+  if (kernelX_) {
+    fftwf_destroy_plan(planKx_);
+    fftwf_destroy_plan(planKy_);
+    fftwf_free(kernelX_);
+    fftwf_free(kernelY_);
+    fftwf_free(Kx_ft_);
+    fftwf_free(Ky_ft_);
+  }
+  kernelX_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
+  kernelY_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
+  Kx_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
+                                         (padWidth_ / 2 + 1));
+  Ky_ft_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
+                                         (padWidth_ / 2 + 1));
+  planKx_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, kernelX_, Kx_ft_,
+                                  FFTW_MEASURE);
+  planKy_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, kernelY_, Ky_ft_,
+                                  FFTW_MEASURE);
+
+  // Rebuild the FFTW plans for the mask and deflection kernels
+  fftwf_destroy_plan(planMask_);
+  fftwf_destroy_plan(planDefX_);
+  fftwf_destroy_plan(planDefY_);
+  fftwf_free(maskBuf_);
+  fftwf_free(maskFT_);
+  fftwf_free(defXFT_);
+  fftwf_free(defYFT_);
+  fftwf_free(defXBuf_);
+  fftwf_free(defYBuf_);
+  maskBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
+  maskFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
+                                          (padWidth_ / 2 + 1));
+  defXFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
+                                          (padWidth_ / 2 + 1));
+  defYFT_ = (fftwf_complex *)fftwf_malloc(sizeof(fftwf_complex) * padHeight_ *
+                                          (padWidth_ / 2 + 1));
+  defXBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
+  defYBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
+  planMask_ = fftwf_plan_dft_r2c_2d(padHeight_, padWidth_, maskBuf_, maskFT_,
+                                    FFTW_MEASURE);
+  planDefX_ = fftwf_plan_dft_c2r_2d(padHeight_, padWidth_, defXFT_, defXBuf_,
+                                    FFTW_MEASURE);
+  planDefY_ = fftwf_plan_dft_c2r_2d(padHeight_, padWidth_, defYFT_, defYBuf_,
+                                    FFTW_MEASURE);
+
+  // Rebuild the segmentation model input tensor
+  inputTensor_ = torch::empty(
+      {1, 3, fastH_, fastW_},
+      torch::TensorOptions().dtype(torch::kFloat32).device(device_));
+  // Rebuild the segmentation model
+  try {
+    segmentModel_ = torch::jit::load(modelPath_, device_);
+    segmentModel_.eval();
+  } catch (const c10::Error &e) {
+    std::cerr << "Error loading segmentation model:\n" << e.what() << std::endl;
+    std::exit(EXIT_FAILURE);
+  }
+
+  // Rebuild the mask and lensed images
+  latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
+  latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
+
+  // Rebuild the kernels now we've redone all our allocations
+  buildKernels();
+
+  // Update the camera feed
+  camFeed_->updateGeometry(width_, height_);
 }

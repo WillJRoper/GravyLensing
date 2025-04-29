@@ -112,6 +112,9 @@ public:
   /// Stop the worker and join
   void stopAsyncSegmentation();
 
+  // Update the geometry of the lens
+  void updateGeometry(int width, int height);
+
 private:
   int width_, height_;       // Frame dimensions
   int padWidth_, padHeight_; // FFT padded dimensions
@@ -120,6 +123,7 @@ private:
   float strength_;           // Mass scaling
   int maskScale_;            // how much we downsample for the segmentation
   int fastW_, fastH_;        // dimensions for the fast segmentation image
+  std::string modelPath_;    // Path to the segmentation model
 
   // Internal state for segmentation
   torch::jit::script::Module segmentModel_;
