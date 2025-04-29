@@ -542,14 +542,6 @@ void LensMask::updateGeometry(int width, int height) {
   inputTensor_ = torch::empty(
       {1, 3, fastH_, fastW_},
       torch::TensorOptions().dtype(torch::kFloat32).device(device_));
-  // Rebuild the segmentation model
-  try {
-    segmentModel_ = torch::jit::load(modelPath_, device_);
-    segmentModel_.eval();
-  } catch (const c10::Error &e) {
-    std::cerr << "Error loading segmentation model:\n" << e.what() << std::endl;
-    std::exit(EXIT_FAILURE);
-  }
 
   // Rebuild the mask and lensed images
   {
