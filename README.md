@@ -163,7 +163,6 @@ python get_models.py \
 
 - Place background images (up to 10) in the `backgrounds/` directory.
 - Use 0-9 keys to cycle through backgrounds.
-- Press `g` at launch (`--debugGrid`) to see the debug view
 - Press `ESC` or close the window to exit.
 
 ## Python Example
