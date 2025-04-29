@@ -78,9 +78,6 @@ int main(int argc, char **argv) {
   LensMask lens(camFeed, softening,
                 /*padFactor=*/2, strength, modelPath, maskScale);
 
-  // Build the lensing kernels we will use
-  lens.buildKernels();
-
   // Set up ViewPort
   ViewPort vp;
 

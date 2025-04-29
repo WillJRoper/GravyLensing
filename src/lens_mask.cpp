@@ -47,18 +47,13 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
       // Pick device at construction time:
       device_(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU) {
 
-  // Compute padded dimensions
-  padWidth_ = width_ * padFactor;
-  padHeight_ = height_ * padFactor;
-  std::cout << "Pad Factor: " << padFactor_ << std::endl;
-  std::cout << "Padded dimensions: " << padWidth_ << " x " << padHeight_
-            << std::endl;
-  std::cout << "Original dimensions: " << width_ << " x " << height_
-            << std::endl;
+  // Ensure we always have a valid mask and lensed image of the right size
+  latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
+  latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
 
-  // Compute downsampled dims once
-  fastW_ = width_ / maskScale_;
-  fastH_ = height_ / maskScale_;
+  // Update the Geometry (we call this function explicitly because it
+  // also handles all the FFTW allocations and builds the kernels)
+  updateGeometry(width_, height_);
 
   // Load TorchScript segmentation model onto device_
   try {
@@ -73,14 +68,6 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
   inputTensor_ = torch::empty(
       {1, 3, fastH_, fastW_},
       torch::TensorOptions().dtype(torch::kFloat32).device(device_));
-
-  // Allocate the FFTW kernels
-  allocateFFTWKernels();
-  allocateFFTWDeflections();
-
-  // Ensure we always have a valid mask and lensed image of the right size
-  latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
-  latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
 }
 
 void LensMask::allocateFFTWKernels() {
@@ -432,9 +419,9 @@ void LensMask::applyLensing(const cv::Mat &background) {
       for (int x = 0; x < W; ++x) {
         float dx = defXBuf_[(y + offY) * pW + (x + offX)] * strength_;
         float dy = defYBuf_[(y + offY) * pW + (x + offX)] * strength_;
-        if (msk[x]) {
-          dx = dy = 0.f;
-        }
+        // if (msk[x]) {
+        //   dx = dy = 0.f;
+        // }
         mpx[x] = std::clamp(x + dx, 0.0f, float(W - 1));
         mpy[x] = std::clamp(y + dy, 0.0f, float(H - 1));
       }
