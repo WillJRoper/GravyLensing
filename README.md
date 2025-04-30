@@ -1,6 +1,6 @@
 # GravyLensing
 
-A real-time gravitational lensing demo application written in C++.
+A real-time gravitational lensing demo application written in C++ and supported by the Goodwood Festival Of Speed Future Lab.
 
 Here is an example of the debug mode showing the mask overlaying me awkwardly sat at my desk along with the lensed and unlensed background.
 
