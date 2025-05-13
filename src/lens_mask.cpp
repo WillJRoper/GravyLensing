@@ -32,6 +32,7 @@
 #pragma push_macro("slots")
 #undef slots
 #endif
+#include <torch/mps.h>    // for MPS support
 #include <torch/script.h> // for torch::jit::script::Module
 #include <torch/torch.h>  // for torch::cuda::is_available, tensor ops
 #if defined(slots)
@@ -51,9 +52,7 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
       // The torch model path
       modelPath_(modelPath),
       // The padding factor for the FFT
-      padFactor_(padFactor),
-      // Pick device at construction time:
-      device_(torch::cuda::is_available() ? torch::kCUDA : torch::kCPU) {
+      padFactor_(padFactor), device_(pickDevice()) {
 
   // Update the Geometry (we call this function explicitly because it
   // also handles all the FFTW allocations and builds the kernels and the
@@ -69,10 +68,7 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
     std::exit(EXIT_FAILURE);
   }
 
-  // Pre-allocate the CHW float tensor on the right device
-  inputTensor_ = torch::empty(
-      {1, 3, fastH_, fastW_},
-      torch::TensorOptions().dtype(torch::kFloat32).device(device_));
+  std::cout << "[LensMask] Loaded model from " << modelPath_ << "\n";
 }
 
 void LensMask::allocateFFTWKernels() {
@@ -201,6 +197,8 @@ void LensMask::detectPersonMask() {
     camFeed_->newFrameReady_ = false;
   }
 
+  std::cout << "[LensMask] Running person segmentation...\n";
+
   // 2) Downsample & convert to RGB
   cv::Mat smallFrame, rgb;
   cv::resize(frame, smallFrame, cv::Size(fastW_, fastH_), 0, 0,
@@ -251,6 +249,94 @@ void LensMask::detectPersonMask() {
   // 7) Upsample to full resolution and publish under lock
   {
     std::lock_guard lk(maskMutex_);
+    newMaskReady_ = true;
+    cv::resize(binMask, latestMask_, cv::Size(width_, height_), 0, 0,
+               cv::INTER_NEAREST);
+  }
+
+  std::cout << "[LensMask] Person segmentation done.\n";
+}
+
+// -----------------------
+// GPU Person Segmentation
+// -----------------------
+void LensMask::detectPersonMaskGPU(int nthreads) {
+
+  // 0) Bail if no new frame
+  if (!camFeed_->newFrameReady_)
+    return;
+
+  // 1) Grab the latest frame under lock
+  cv::Mat frame;
+  {
+    if (camFeed_->latestFrame_.empty())
+      return;
+    frame = camFeed_->latestFrame_;
+    camFeed_->newFrameReady_ = false;
+  }
+
+  // 2) Downsample & convert to RGB
+  cv::Mat smallFrame, rgb;
+  cv::resize(frame, smallFrame, cv::Size(fastW_, fastH_), 0, 0,
+             cv::INTER_LINEAR);
+  cv::cvtColor(smallFrame, rgb, cv::COLOR_BGR2RGB);
+
+  // 3) COPY & NORMALIZE on CPU staging tensor
+  float *cpu_ptr = inputCpuTensor_.data_ptr<float>();
+  const int HW = fastH_ * fastW_;
+#pragma omp parallel for num_threads(nthreads)
+  for (int y = 0; y < fastH_; ++y) {
+    const cv::Vec3b *row = rgb.ptr<cv::Vec3b>(y);
+    for (int x = 0; x < fastW_; ++x) {
+      int idx = y * fastW_ + x;
+      cpu_ptr[0 * HW + idx] = row[x][0] / 255.f;
+      cpu_ptr[1 * HW + idx] = row[x][1] / 255.f;
+      cpu_ptr[2 * HW + idx] = row[x][2] / 255.f;
+    }
+  }
+  // Normalize channels (torch ops on CPU)
+  auto tc = inputCpuTensor_;
+  tc[0][0].sub_(0.485f).div_(0.229f);
+  tc[0][1].sub_(0.456f).div_(0.224f);
+  tc[0][2].sub_(0.406f).div_(0.225f);
+
+  // 4) COPY CPU staging → GPU device tensor
+  inputTensor_.copy_(inputCpuTensor_, /*non_blocking=*/true);
+
+  // 5) RUN inference on GPU
+  // Direct JIT method call avoids rebuilding vectors:
+  static const auto forwardMethod = segmentModel_.get_method("forward");
+  auto out_iv = forwardMethod({inputTensor_});
+
+  // Unwrap IValue → logits tensor:
+  torch::Tensor logits;
+  if (out_iv.isTensor())
+    logits = out_iv.toTensor();
+  else if (out_iv.isTuple())
+    logits = out_iv.toTuple()->elements()[0].toTensor();
+  else if (out_iv.isGenericDict())
+    logits = out_iv.toGenericDict().at("out").toTensor();
+  else {
+    std::cerr << "[LensMask] Bad IValue\n";
+    return;
+  }
+
+  // 6) Bring logits back to CPU, pick class
+  torch::Tensor cm_gpu = logits
+                             .squeeze(0) // [1,C,H,W] → [C,H,W]
+                             .argmax(0)  // [C,H,W] → [H,W] (still on GPU/MPS)
+                             .to(torch::kUInt8); // uint8 on GPU
+
+  // now transfer only [H,W] uint8 data to the CPU
+  auto cm = cm_gpu.to(torch::kCPU);
+
+  // 7) Build OpenCV mask & upsample
+  cv::Mat fastMask(fastH_, fastW_, CV_8UC1, cm.data_ptr<uint8_t>());
+  cv::Mat binMask;
+  cv::compare(fastMask, /*personClass=*/15, binMask, cv::CMP_EQ);
+
+  {
+    // std::lock_guard lk(maskMutex_);
     newMaskReady_ = true;
     cv::resize(binMask, latestMask_, cv::Size(width_, height_), 0, 0,
                cv::INTER_NEAREST);
@@ -467,35 +553,35 @@ void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
             cv::BORDER_REFLECT);
 }
 
-void LensMask::startAsyncSegmentation() {
-  stopWorker_ = false;
-  workerThread_ = std::thread(&LensMask::segmentationLoop, this);
-}
-
-void LensMask::stopAsyncSegmentation() {
-  stopWorker_ = true;
-  if (workerThread_.joinable())
-    workerThread_.join();
-}
-
-void LensMask::segmentationLoop() {
-  int nframes = 0;
-  while (!stopWorker_) {
-    cv::Mat frameCopy;
-    {
-      std::lock_guard lk(camFeed_->frameMutex_);
-      camFeed_->latestFrame_.copyTo(frameCopy);
-    }
-
-    // Run your downsample+infer+upsample pipeline on frameCopy:
-    cv::Mat mask;
-    detectPersonMask();
-
-    // Small pause to yield CPU
-    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  }
-}
-
+// void LensMask::startAsyncSegmentation() {
+//   stopWorker_ = false;
+//   workerThread_ = std::thread(&LensMask::segmentationLoop, this);
+// }
+//
+// void LensMask::stopAsyncSegmentation() {
+//   stopWorker_ = true;
+//   if (workerThread_.joinable())
+//     workerThread_.join();
+// }
+//
+// void LensMask::segmentationLoop() {
+//   int nframes = 0;
+//   while (!stopWorker_) {
+//     cv::Mat frameCopy;
+//     {
+//       std::lock_guard lk(camFeed_->frameMutex_);
+//       camFeed_->latestFrame_.copyTo(frameCopy);
+//     }
+//
+//     // Run your downsample+infer+upsample pipeline on frameCopy:
+//     cv::Mat mask;
+//     detectPersonMask();
+//
+//     // Small pause to yield CPU
+//     std::this_thread::sleep_for(std::chrono::milliseconds(30));
+//   }
+// }
+//
 /**
  * @brief Update the geometry of the lens.
  *
@@ -533,10 +619,20 @@ void LensMask::updateGeometry(int width, int height) {
   // Rebuild the kernels now we've redone all our allocations
   buildKernels();
 
-  // Rebuild the segmentation model input tensor
+  // (Re)Allocate a CPU tensor for staging
+  inputCpuTensor_ = torch::empty(
+      {1, 3, fastH_, fastW_},
+      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
+
+  // (Re)Allocate the device tensor (empty for now)
   inputTensor_ = torch::empty(
       {1, 3, fastH_, fastW_},
       torch::TensorOptions().dtype(torch::kFloat32).device(device_));
+
+  std::cout << "[LensMask] Allocated CPU tensor of size "
+            << inputCpuTensor_.sizes() << "\n";
+  std::cout << "[LensMask] Allocated device tensor of size "
+            << inputTensor_.sizes() << " on device " << device_ << "\n";
 
   // Rebuild the mask and lensed images
   {

@@ -28,10 +28,32 @@
 #undef slots
 #endif
 #include <torch/script.h>
+#include <torch/torch.h>
 #if defined(slots)
 #pragma pop_macro("slots")
 #endif
 #include <vector>
+
+/**
+ * @brief Pick the device for PyTorch operations.
+ *
+ * This function checks for MPS and CUDA availability, and returns the
+ * appropriate device.
+ *
+ * @returns torch::Device object representing the selected device.
+ */
+static torch::Device pickDevice() {
+  torch::DeviceType dtype = torch::kCPU;
+  if (torch::mps::is_available()) {
+    std::cout << "[LensMask] Using MPS backend\n";
+    return torch::Device(torch::kMPS);
+  } else if (torch::cuda::is_available()) {
+    std::cout << "[LensMask] Using CUDA backend\n";
+    return torch::Device(torch::kCUDA);
+  }
+  std::cout << "[LensMask] Using CPU backend\n";
+  return torch::Device(torch::kCPU);
+}
 
 /**
  * LensMask
@@ -69,6 +91,19 @@ public:
   // Define a lock for updating the Geometry
   std::mutex geometryMutex_;
 
+  // The training device
+  torch::Device device_;
+
+  // Internal state for segmentation
+  torch::jit::script::Module segmentModel_;
+
+  // Dimensions for the fast segmentation image
+  int fastW_, fastH_;
+
+  // pre-allocated Tensor for inference on the CPU and GPU
+  torch::Tensor inputCpuTensor_; // always on CPU
+  torch::Tensor inputTensor_;    // on device_ (CUDA/MPS/CPU)
+
   /**
    * @brief Constructor
    *
@@ -84,8 +119,8 @@ public:
   /** Destructor: cleans up FFT plans and buffers */
   ~LensMask();
 
-  // Worker entrypoint
-  void segmentationLoop();
+  // // Worker entrypoint
+  // void segmentationLoop();
 
   /**
    * @brief Detect the person mask in the current frame using a segmentation
@@ -94,6 +129,10 @@ public:
    * @param frame  Input BGR image
    */
   void detectPersonMask();
+
+  // Detect a person mask in the current frame using a segmentation model on
+  // the GPU
+  void detectPersonMaskGPU(int nthreads = 1);
 
   void shadeMask(cv::Mat &frame);
 
@@ -113,11 +152,11 @@ public:
    */
   void applyLensing(const cv::Mat &background, int nthreads = 1);
 
-  /// Start the segmentation worker thread
-  void startAsyncSegmentation();
-
-  /// Stop the worker and join
-  void stopAsyncSegmentation();
+  // /// Start the segmentation worker thread
+  // void startAsyncSegmentation();
+  //
+  // /// Stop the worker and join
+  // void stopAsyncSegmentation();
 
   // Update the geometry of the lens
   void updateGeometry(int width, int height);
@@ -129,19 +168,11 @@ private:
   float softening_;          // Softening radius
   float strength_;           // Mass scaling
   int maskScale_;            // how much we downsample for the segmentation
-  int fastW_, fastH_;        // dimensions for the fast segmentation image
   std::string modelPath_;    // Path to the segmentation model
 
   // Define a locks for the FFTW kernels and deflections
   std::mutex fftwKernelMutex_;
   std::mutex fftwDeflectionMutex_;
-
-  // Internal state for segmentation
-  torch::jit::script::Module segmentModel_;
-  torch::Device device_;
-
-  // pre-allocated Tensor for inference
-  torch::Tensor inputTensor_;
 
   // OpenCV VideoCapture for webcam
   cv::VideoCapture cap_;
