@@ -47,6 +47,10 @@ CameraFeed::CameraFeed(int deviceIndex, int width, int height)
   // later on)
   cap_.set(cv::CAP_PROP_FRAME_WIDTH, width_);
   cap_.set(cv::CAP_PROP_FRAME_HEIGHT, height_);
+
+  // Report the maximum frame rate
+  double fps = cap_.get(cv::CAP_PROP_FPS);
+  std::cout << "Camera-reported FPS: " << fps << "\n";
 }
 
 /**
