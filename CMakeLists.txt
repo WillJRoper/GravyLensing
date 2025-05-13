@@ -6,6 +6,11 @@ project(GravyLensing LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Define USE_MPS on macOS to enable MPS checks
+if(APPLE)
+  add_definitions(-DUSE_MPS)
+endif()
+
 # ============================================================================
 # OpenMP Configuration
 # Find and enable OpenMP
@@ -138,7 +143,6 @@ set_target_properties(gravy_lens PROPERTIES
 # ============================================================================
 # Linker settings
 
-# Link against required libraries
 target_link_libraries(gravy_lens PRIVATE
   ${OpenCV_LIBS}
   Threads::Threads
@@ -146,6 +150,15 @@ target_link_libraries(gravy_lens PRIVATE
   ${TORCH_LIBRARIES}
   Qt6::Widgets
 )
+
+if(APPLE)
+  target_link_libraries(gravy_lens PRIVATE
+    "-framework Foundation"
+    "-framework Metal"
+    "-framework MetalPerformanceShaders"
+    "-framework CoreVideo"
+  )
+endif()
 
 # Ensure that Qt exported symbols are available on all platforms
 set_property(TARGET gravy_lens PROPERTY ENABLE_EXPORTS ON)

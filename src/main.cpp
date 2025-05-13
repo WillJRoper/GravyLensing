@@ -23,6 +23,7 @@
 // Standard includes
 #include <QApplication>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <fftw3.h>
 #include <iostream>
@@ -32,6 +33,7 @@
 #include "backgrounds.hpp"
 #include "cam_feed.hpp"
 #include "cmd_parser.hpp"
+#include "detection.hpp"
 #include "lens_mask.hpp"
 #include "viewport.hpp"
 
@@ -103,8 +105,10 @@ int main(int argc, char **argv) {
   // Show the main window
   vp.show();
 
-  // We'll do the detection on a separate thread, so start it now
-  lens.startAsyncSegmentation();
+  // Initialise the timer and FPS (we only use the latter for debugging)
+  static QElapsedTimer fpsTimer;
+  static int fpsFrameCount = 0;
+  fpsTimer.start();
 
   // Use QTimer to drive capture
   QTimer *frameTimer = new QTimer(&vp);
@@ -116,6 +120,12 @@ int main(int argc, char **argv) {
       return;
     }
 
+#ifdef USE_MPS
+    lens.detectPersonMaskGPU(nthreads);
+#else
+    lens.detectPersonMask();
+#endif
+
     // Apply lensing
     lens.applyLensing(backgrounds.current(), nthreads);
 
@@ -125,16 +135,30 @@ int main(int argc, char **argv) {
     if (debugGrid) {
       vp.setMask(lens.latestMask_);
       vp.setBackground(backgrounds.current());
+
+      // ————————————————————————————————
+      // FPS measurement
+      ++fpsFrameCount;
+      qint64 elapsed = fpsTimer.elapsed(); // ms since start
+      if (elapsed >= 1000) {               // once per second
+        double fps = fpsFrameCount * 1000.0 / elapsed;
+        qDebug("Approx FPS: %.1f", fps);
+        // reset for next interval
+        fpsTimer.restart();
+        fpsFrameCount = 0;
+      }
     }
   });
-  frameTimer->start(1000 / 60); // ~60 fps
+
+  // Set the timer interval to get 60 FPS
+  frameTimer->start(1000 / 60);
 
   // Enter Qt event loop
   int ret = app.exec();
 
   // Clean up
   frameTimer->stop();
-  lens.stopAsyncSegmentation();
+  // lens.stopAsyncSegmentation();
 
   return 0;
 }
