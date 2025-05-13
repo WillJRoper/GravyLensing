@@ -21,7 +21,6 @@
 
 #include <atomic>
 #include <iostream>
-#include <mutex>
 #include <opencv2/opencv.hpp>
 
 class CameraFeed {
@@ -29,8 +28,6 @@ class CameraFeed {
 public:
   // Define a container for the latest frame
   cv::Mat latestFrame_;
-  std::mutex frameMutex_;                  // guards latestFrame_
-  std::atomic<bool> newFrameReady_{false}; // indicates if a new frame is ready
 
   // Geometry of the camera feed
   int width_;

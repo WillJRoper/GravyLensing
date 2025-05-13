@@ -73,9 +73,6 @@ LensMask::LensMask(CameraFeed *camFeed, float softening, int padFactor,
 
 void LensMask::allocateFFTWKernels() {
 
-  // Lock the mutex to ensure thread safety
-  std::lock_guard lk(fftwKernelMutex_);
-
   // Allocate the FFTW buffers for the kernels
   kernelX_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
   kernelY_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
@@ -93,9 +90,6 @@ void LensMask::allocateFFTWKernels() {
 
 void LensMask::freeFFTWKernels() {
 
-  // Lock the mutex to ensure thread safety
-  std::lock_guard lk(fftwKernelMutex_);
-
   if (planKx_)
     fftwf_destroy_plan(planKx_);
   if (planKy_)
@@ -111,9 +105,6 @@ void LensMask::freeFFTWKernels() {
 }
 
 void LensMask::allocateFFTWDeflections() {
-
-  // Lock the mutex to ensure thread safety
-  std::lock_guard lk(fftwDeflectionMutex_);
 
   // Allocate the FFTW buffers for the deflections
   maskBuf_ = (float *)fftwf_malloc(sizeof(float) * padHeight_ * padWidth_);
@@ -140,9 +131,6 @@ void LensMask::allocateFFTWDeflections() {
 }
 
 void LensMask::freeFFTWDeflections() {
-
-  // Lock the mutex to ensure thread safety
-  std::lock_guard lk(fftwDeflectionMutex_);
 
   // Free the FFTW plans and buffers
   if (maskBuf_)
@@ -181,20 +169,12 @@ LensMask::~LensMask() {
 // -----------------------
 void LensMask::detectPersonMask() {
 
-  std::lock_guard lk(geometryMutex_);
-
-  // 0) Bail if no new frame
-  if (!camFeed_->newFrameReady_)
-    return;
-
-  // 1) Grab the latest frame under lock
+  // 1) Grab the latest frame
   cv::Mat frame;
   {
-    std::lock_guard lk(camFeed_->frameMutex_);
     if (camFeed_->latestFrame_.empty())
       return;
     frame = camFeed_->latestFrame_.clone();
-    camFeed_->newFrameReady_ = false;
   }
 
   // 2) Downsample & convert to RGB
@@ -246,8 +226,6 @@ void LensMask::detectPersonMask() {
 
   // 7) Upsample to full resolution and publish under lock
   {
-    std::lock_guard lk(maskMutex_);
-    newMaskReady_ = true;
     cv::resize(binMask, latestMask_, cv::Size(width_, height_), 0, 0,
                cv::INTER_NEAREST);
   }
@@ -258,17 +236,12 @@ void LensMask::detectPersonMask() {
 // -----------------------
 void LensMask::detectPersonMaskGPU(int nthreads) {
 
-  // 0) Bail if no new frame
-  if (!camFeed_->newFrameReady_)
-    return;
-
   // 1) Grab the latest frame under lock
   cv::Mat frame;
   {
     if (camFeed_->latestFrame_.empty())
       return;
     frame = camFeed_->latestFrame_;
-    camFeed_->newFrameReady_ = false;
   }
 
   // 2) Downsample & convert to RGB
@@ -332,8 +305,6 @@ void LensMask::detectPersonMaskGPU(int nthreads) {
   cv::compare(fastMask, /*personClass=*/15, binMask, cv::CMP_EQ);
 
   {
-    // std::lock_guard lk(maskMutex_);
-    newMaskReady_ = true;
     cv::resize(binMask, latestMask_, cv::Size(width_, height_), 0, 0,
                cv::INTER_NEAREST);
   }
@@ -342,8 +313,7 @@ void LensMask::detectPersonMaskGPU(int nthreads) {
 void LensMask::shadeMask(cv::Mat &frame) {
   cv::Mat maskCopy;
   {
-    // Grab the latest mask under lock
-    std::lock_guard lk(maskMutex_);
+    // Grab the latest mask
     if (latestMask_.empty()) {
       // No mask computed yet → nothing to shade
       return;
@@ -449,18 +419,12 @@ void LensMask::buildKernels() {
 // -----------------------
 void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
 
-  // No new mask? Then nothing to do
-  if (!newMaskReady_)
-    return;
-
   // Grab a local copy of the mask under its own lock
   cv::Mat maskCopy;
   {
-    std::lock_guard lk(maskMutex_);
     if (latestMask_.empty())
       return;
     latestMask_.copyTo(maskCopy);
-    newMaskReady_ = false;
   }
 
   // Dimensions
@@ -543,40 +507,11 @@ void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
     }
   }
 
-  // Final remap under lensedMutex_
+  // Final remap
   cv::remap(background, latestLensed_, mapX_, mapY_, cv::INTER_LINEAR,
             cv::BORDER_REFLECT);
 }
 
-// void LensMask::startAsyncSegmentation() {
-//   stopWorker_ = false;
-//   workerThread_ = std::thread(&LensMask::segmentationLoop, this);
-// }
-//
-// void LensMask::stopAsyncSegmentation() {
-//   stopWorker_ = true;
-//   if (workerThread_.joinable())
-//     workerThread_.join();
-// }
-//
-// void LensMask::segmentationLoop() {
-//   int nframes = 0;
-//   while (!stopWorker_) {
-//     cv::Mat frameCopy;
-//     {
-//       std::lock_guard lk(camFeed_->frameMutex_);
-//       camFeed_->latestFrame_.copyTo(frameCopy);
-//     }
-//
-//     // Run your downsample+infer+upsample pipeline on frameCopy:
-//     cv::Mat mask;
-//     detectPersonMask();
-//
-//     // Small pause to yield CPU
-//     std::this_thread::sleep_for(std::chrono::milliseconds(30));
-//   }
-// }
-//
 /**
  * @brief Update the geometry of the lens.
  *
@@ -631,11 +566,9 @@ void LensMask::updateGeometry(int width, int height) {
 
   // Rebuild the mask and lensed images
   {
-    std::lock_guard lk(maskMutex_);
     latestMask_ = cv::Mat::zeros(height_, width_, CV_8UC1);
   }
   {
-    std::lock_guard lk(lensedMutex_);
     latestLensed_ = cv::Mat::zeros(height_, width_, CV_8UC3);
   }
 

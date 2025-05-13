@@ -34,7 +34,6 @@
 #include "backgrounds.hpp"
 #include "cam_feed.hpp"
 #include "cmd_parser.hpp"
-#include "detection.hpp"
 #include "lens_mask.hpp"
 #include "viewport.hpp"
 
@@ -85,7 +84,7 @@ int main(int argc, char **argv) {
   ViewPort vp;
 
   // Set the title of the window
-  vp.setWindowTitle("GravyLensing Demo");
+  vp.setWindowTitle("Gravy Lensing");
 
   // Attach pointers to the lens and backgrounds (we'll need them for
   // key press interactions: switching background etc.)

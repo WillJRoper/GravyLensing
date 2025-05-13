@@ -77,20 +77,11 @@ public:
   // Pointer to the CameraFeed object so we can access the latest frame
   CameraFeed *camFeed_ = nullptr;
 
-  // Create a flag for whether there is a new mask to show
-  std::atomic<bool> newMaskReady_{false};
-
   // The latest mask computed
   cv::Mat latestMask_;
-  std::mutex maskMutex_; // guards latestMask_
 
   // The latest lensed image computed
   cv::Mat latestLensed_;
-  std::mutex lensedMutex_; // guards latestLensed_
-
-  // Define a lock for updating the Geometry
-  std::mutex geometryMutex_;
-
   // The training device
   torch::Device device_;
 
@@ -169,10 +160,6 @@ private:
   float strength_;           // Mass scaling
   int maskScale_;            // how much we downsample for the segmentation
   std::string modelPath_;    // Path to the segmentation model
-
-  // Define a locks for the FFTW kernels and deflections
-  std::mutex fftwKernelMutex_;
-  std::mutex fftwDeflectionMutex_;
 
   // OpenCV VideoCapture for webcam
   cv::VideoCapture cap_;

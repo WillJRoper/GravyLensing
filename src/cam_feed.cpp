@@ -96,9 +96,6 @@ bool CameraFeed::captureFrame() {
 
     // Mirror it horizontally so on-screen motion matches real motion
     cv::flip(latestFrame_, latestFrame_, /*flipCode=*/1);
-
-    // Mark it ready
-    newFrameReady_.store(true, std::memory_order_release);
   }
 
   // No we are unlocked and have everything we need the rest of the code can
