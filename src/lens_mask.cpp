@@ -197,8 +197,6 @@ void LensMask::detectPersonMask() {
     camFeed_->newFrameReady_ = false;
   }
 
-  std::cout << "[LensMask] Running person segmentation...\n";
-
   // 2) Downsample & convert to RGB
   cv::Mat smallFrame, rgb;
   cv::resize(frame, smallFrame, cv::Size(fastW_, fastH_), 0, 0,
@@ -253,8 +251,6 @@ void LensMask::detectPersonMask() {
     cv::resize(binMask, latestMask_, cv::Size(width_, height_), 0, 0,
                cv::INTER_NEAREST);
   }
-
-  std::cout << "[LensMask] Person segmentation done.\n";
 }
 
 // -----------------------
@@ -390,8 +386,6 @@ void LensMask::shadeMask(cv::Mat &frame) {
 // Build the real-space deflection kernels and FFT them
 void LensMask::buildKernels() {
 
-  std::lock_guard lk(fftwKernelMutex_);
-
   const int H = padHeight_;
   const int W = padWidth_;
   const int N = H * W;
@@ -454,6 +448,7 @@ void LensMask::buildKernels() {
 // Apply Lensing
 // -----------------------
 void LensMask::applyLensing(const cv::Mat &background, int nthreads) {
+
   // No new mask? Then nothing to do
   if (!newMaskReady_)
     return;

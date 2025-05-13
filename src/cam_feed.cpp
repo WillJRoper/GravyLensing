@@ -82,8 +82,6 @@ bool CameraFeed::captureFrame() {
 
   // Try and grab a new frame with the lock
   {
-    std::lock_guard<std::mutex> lock(frameMutex_);
-
     // grab() just queues the next frame; cheaper than read()
     if (!cap_.grab()) {
       std::cerr << "Failed to grab frame\n";

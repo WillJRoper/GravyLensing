@@ -25,6 +25,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QTimer>
+#include <chrono>
 #include <fftw3.h>
 #include <iostream>
 #include <opencv2/opencv.hpp>
@@ -114,30 +115,59 @@ int main(int argc, char **argv) {
   QTimer *frameTimer = new QTimer(&vp);
   QObject::connect(frameTimer, &QTimer::timeout, [&]() {
     // Capture frame
+    double capture_start =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
     if (!camFeed->captureFrame()) {
       qWarning("Camera frame failed, stopping timer.");
       frameTimer->stop();
       return;
     }
+    double capture_end =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    std::cout << "Capture time: " << (capture_end - capture_start) / 1e6
+              << " ms\n";
 
+    double detect_start =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
 #ifdef USE_MPS
     lens.detectPersonMaskGPU(nthreads);
 #else
     lens.detectPersonMask();
 #endif
+    double detect_end =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    std::cout << "Detection time: " << (detect_end - detect_start) / 1e6
+              << " ms\n";
 
     // Apply lensing
+    double lens_start =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
     lens.applyLensing(backgrounds.current(), nthreads);
+    double lens_end =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    std::cout << "Lensing time: " << (detect_end - detect_start) / 1e6
+              << " ms\n";
 
     // Update viewport images
-    vp.setImage(camFeed->latestFrame_);
+    double update_start =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
     vp.setLens(lens.latestLensed_);
+    double update_end =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
     if (debugGrid) {
+      double db_update_start =
+          std::chrono::high_resolution_clock::now().time_since_epoch().count();
+      vp.setImage(camFeed->latestFrame_);
       vp.setMask(lens.latestMask_);
       vp.setBackground(backgrounds.current());
+      double db_update_end =
+          std::chrono::high_resolution_clock::now().time_since_epoch().count();
+      std::cout << "Debug update time: "
+                << (db_update_end - db_update_start) / 1e6 << " ms\n";
 
-      // ————————————————————————————————
       // FPS measurement
+      double fps_start =
+          std::chrono::high_resolution_clock::now().time_since_epoch().count();
       ++fpsFrameCount;
       qint64 elapsed = fpsTimer.elapsed(); // ms since start
       if (elapsed >= 1000) {               // once per second
@@ -147,6 +177,11 @@ int main(int argc, char **argv) {
         fpsTimer.restart();
         fpsFrameCount = 0;
       }
+      double fps_end =
+          std::chrono::high_resolution_clock::now().time_since_epoch().count();
+      std::cout << "FPS time: " << (fps_end - fps_start) / 1e6 << " ms\n";
+      std::cout << "Update time: " << (update_end - update_start) / 1e6
+                << " ms\n";
     }
   });
 
@@ -158,7 +193,6 @@ int main(int argc, char **argv) {
 
   // Clean up
   frameTimer->stop();
-  // lens.stopAsyncSegmentation();
 
   return 0;
 }

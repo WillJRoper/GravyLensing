@@ -150,7 +150,6 @@ void ViewPort::keyPressEvent(QKeyEvent *event) {
     // remap the lens and camera feed to the background dimensions)
     if (backgrounds_->setIndex(idx)) {
       {
-        std::lock_guard lk(lensObj_->geometryMutex_);
         setBackground(backgrounds_->current());
         lensObj_->updateGeometry(backgrounds_->cols(), backgrounds_->rows());
       }
