@@ -45,6 +45,7 @@ public:
   int modelSize;
   float temporalSmooth;
   float lowerRes;
+  int secondsPerBackground;
   std::string modelPath;
 
   // Constructor is also the parser
@@ -115,6 +116,12 @@ public:
         "1.0");
     parser.addOption(lowerResOption);
 
+    // secondsPerBackground <int> (default -1, i.e infinite)
+    QCommandLineOption secondsPerBackgroundOption(
+        QStringList() << "sb" << "secondsPerBackground",
+        "Seconds per background (int).", "secondsPerBackground", "-1");
+    parser.addOption(secondsPerBackgroundOption);
+
     parser.process(app);
 
     // Validate required --nthreads
@@ -178,6 +185,13 @@ public:
     opts.lowerRes = parser.value(lowerResOption).toFloat(&ok);
     if (!ok) {
       std::cerr << "Error: --lowerRes must be a float.\n";
+      std::exit(-1);
+    }
+
+    opts.secondsPerBackground =
+        parser.value(secondsPerBackgroundOption).toInt(&ok);
+    if (!ok) {
+      std::cerr << "Error: --secondsPerBackground must be an integer.\n";
       std::exit(-1);
     }
 
