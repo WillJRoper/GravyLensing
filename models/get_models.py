@@ -154,11 +154,14 @@ def main():
     parser.add_argument(
         "--width",
         type=int,
-        default=320,
+        default=512,
         help="Width for dummy input",
     )
     parser.add_argument(
-        "--height", type=int, default=320, help="Height for dummy input"
+        "--height",
+        type=int,
+        default=512,
+        help="Height for dummy input",
     )
     args = parser.parse_args()
 
@@ -168,7 +171,8 @@ def main():
     os.makedirs("models", exist_ok=True)
     ext = "onnx" if args.format == "onnx" else "pt"
     out_path = os.path.join(
-        "models", f"{args.model}_{args.format}_{args.precision}.{ext}"
+        "models",
+        f"{args.model}_{args.format}_{args.precision}_{args.width}_{args.height}.{ext}",
     )
 
     dummy = torch.randn(1, 3, args.height, args.width, device=device)

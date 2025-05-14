@@ -1,7 +1,13 @@
 /**
- * VeiwPort
+ * @file viewport.hpp
  *
  * This file defines the UI for the GravyLensing application.
+ *
+ * This class loads a set of background images from a specified directory
+ * and enables switching between them.
+ *
+ * This file is part of GravyLensing, a real-time gravitational lensing
+ * simulation.
  *
  * GravyLensing is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,25 +26,32 @@
 #pragma once
 
 // Standard includes
-#include <opencv2/opencv.hpp>
+
+// Qt includes
 #include <qtwidgets/QLabel>
 #include <qtwidgets/QMainWindow>
+
+// External includes
+#include <opencv2/opencv.hpp>
 
 // Local includes
 #include "backgrounds.hpp"
 #include "cam_feed.hpp"
-#include "lens_mask.hpp"
 
+/**
+ * @brief ViewPort class
+ *
+ * This class defines the UI for the GravyLensing application.
+ *
+ * It displays the input frame, mask, overlay, and lensed background in a grid
+ * layout. It also provides methods to switch between different views and set
+ * the background images.
+ */
 class ViewPort : public QMainWindow {
   Q_OBJECT
 public:
   explicit ViewPort(QWidget *parent = nullptr);
   ~ViewPort() override;
-
-  void setImage(const cv::Mat &image);
-  void setBackground(const cv::Mat &background);
-  void setLens(const cv::Mat &lens);
-  void setMask(const cv::Mat &mask);
 
   /// Display only the lensed background
   void showLensedView();
@@ -51,12 +64,15 @@ public:
     backgrounds_ = backgrounds;
   }
 
-  // Set the lens
-  void setLens(LensMask *lens) { lensObj_ = lens; }
-
 protected:
   // catch key presses
   void keyPressEvent(QKeyEvent *event) override;
+
+public Q_SLOTS:
+  void setImage(const cv::Mat &image);
+  void setBackground(const cv::Mat &background);
+  void setLens(const cv::Mat &lens);
+  void setMask(const cv::Mat &mask);
 
 private:
   QLabel *imageLabel_;
@@ -71,7 +87,7 @@ private:
 
   // Pointer to all the available background images
   Backgrounds *backgrounds_{nullptr};
-
-  // Pointer to the lens
-  LensMask *lensObj_{nullptr};
 };
+
+// The getter called from main.cpp
+ViewPort *initViewport(Backgrounds *backgrounds, bool debugGrid);

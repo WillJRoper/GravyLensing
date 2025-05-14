@@ -1,5 +1,7 @@
 /**
- * CommandLineOptions
+ * @file cmd_parser.hpp
+ *
+ * Defines the interface to the command-line parser for GravyLensing.
  *
  * This class is responsible for parsing command-line options using Qt's
  * QCommandLineParser. It provides a convenient way to handle various
@@ -21,11 +23,15 @@
  * You should have received a copy of the GNU General Public License
  * along with GravyLensing. If not, see <http://www.gnu.org/licenses/>.
  */
+
 #pragma once
 
+// Standard includes
+#include <string>
+
+// Qt includes
 #include <QApplication>
 #include <QCommandLineParser>
-#include <iostream>
 
 class CommandLineOptions {
 public:
@@ -33,10 +39,12 @@ public:
   int nthreads;
   float strength;
   float softening;
-  int maskScale;
   int deviceIndex;
   bool debugGrid;
   int padFactor;
+  int modelSize;
+  float temporalSmooth;
+  float lowerRes;
   std::string modelPath;
 
   // Constructor is also the parser
@@ -63,11 +71,11 @@ public:
                                        "30.0");
     parser.addOption(softeningOption);
 
-    // --mask-scale <int> (default 4)
-    QCommandLineOption maskScaleOption(QStringList() << "m" << "maskScale",
-                                       "Mask scale factor (int).", "maskScale",
-                                       "4");
-    parser.addOption(maskScaleOption);
+    // --modelSize <int> (default 512)
+    QCommandLineOption modelSizeOption(QStringList() << "m" << "modelSize",
+                                       "Segmentation model size (int).",
+                                       "modelSize", "512");
+    parser.addOption(modelSizeOption);
 
     // --device-index <int> (default 0)
     QCommandLineOption deviceIndexOption(QStringList() << "d" << "deviceIndex",
@@ -93,6 +101,19 @@ public:
         "Path to the segmentation model (string).", "modelPath",
         "models/deeplab_quantized_model.pt");
     parser.addOption(modelPathOption);
+
+    // --temporal smooth <float> (default 0.6)
+    QCommandLineOption temporalSmoothOption(
+        QStringList() << "t" << "temporalSmooth",
+        "Temporal frame smoothing factor (float).", "temporalSmooth", "0.25");
+    parser.addOption(temporalSmoothOption);
+
+    // lowerRes <float> (default 1.0)
+    QCommandLineOption lowerResOption(
+        QStringList() << "lr" << "lowerRes",
+        "Lower resolution factor for the lensing effect (float).", "lowerRes",
+        "1.0");
+    parser.addOption(lowerResOption);
 
     parser.process(app);
 
@@ -122,9 +143,9 @@ public:
       std::exit(-1);
     }
 
-    opts.maskScale = parser.value(maskScaleOption).toInt(&ok);
+    opts.modelSize = parser.value(modelSizeOption).toInt(&ok);
     if (!ok) {
-      std::cerr << "Error: --maskScale must be an integer.\n";
+      std::cerr << "Error: --modelSize must be an integer.\n";
       std::exit(-1);
     }
 
@@ -145,6 +166,18 @@ public:
     opts.modelPath = parser.value(modelPathOption).toStdString();
     if (opts.modelPath.empty()) {
       std::cerr << "Error: --modelPath must be a non-empty string.\n";
+      std::exit(-1);
+    }
+
+    opts.temporalSmooth = parser.value(temporalSmoothOption).toFloat(&ok);
+    if (!ok) {
+      std::cerr << "Error: --temporalSmooth must be a float.\n";
+      std::exit(-1);
+    }
+
+    opts.lowerRes = parser.value(lowerResOption).toFloat(&ok);
+    if (!ok) {
+      std::cerr << "Error: --lowerRes must be a float.\n";
       std::exit(-1);
     }
 
