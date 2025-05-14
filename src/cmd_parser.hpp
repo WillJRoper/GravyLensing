@@ -46,6 +46,7 @@ public:
   float temporalSmooth;
   float lowerRes;
   int secondsPerBackground;
+  bool distortInside;
   std::string modelPath;
 
   // Constructor is also the parser
@@ -122,6 +123,11 @@ public:
         "Seconds per background (int).", "secondsPerBackground", "-1");
     parser.addOption(secondsPerBackgroundOption);
 
+    // distortInside <bool> (flag only; no argument)
+    QCommandLineOption distortInsideOption(
+        QStringList() << "di" << "distortInside", "Distort inside the mask.");
+    parser.addOption(distortInsideOption);
+
     parser.process(app);
 
     // Validate required --nthreads
@@ -194,6 +200,8 @@ public:
       std::cerr << "Error: --secondsPerBackground must be an integer.\n";
       std::exit(-1);
     }
+
+    opts.distortInside = parser.isSet(distortInsideOption);
 
     return opts;
   }

@@ -119,11 +119,8 @@ private:
   // Which output channel is “person”?
   static constexpr int kPersonClass_ = 15;
 
-  // Parameters for refining the mask
-  const int gfRadius = 8;        // guided-filter radius
-  const double gfEps = 0.01;     // guided-filter ε (edge sharpness)
-  const float probThresh = 0.5f; // mask threshold
-  const int minBlobArea = 100;   // drop any component smaller than this
+  // Drop bolbs in the mask smaller than this
+  const int minBlobArea = 50;
 
   // ================== Member Function Prototypes ==================
 

@@ -39,9 +39,9 @@
  *   smaller than the background resolution.
  */
 LensingWorker::LensingWorker(float strength, float softening, int padFactor,
-                             int nthreads, float lowerRes)
+                             int nthreads, float lowerRes, bool distortInside)
     : strength_(strength), softening_(softening), padFactor_(padFactor),
-      nthreads_(nthreads), lowerRes_(lowerRes) {
+      nthreads_(nthreads), lowerRes_(lowerRes), distortInside_(distortInside) {
 
   std::cout << "[LensingWorker] Initializing lensing worker...\n";
   std::cout << "[LensingWorker] Strength: " << strength_ << "\n";
@@ -309,9 +309,19 @@ void LensingWorker::applyLensing(const cv::Mat &mask) {
 #pragma omp parallel for num_threads(nthreads_)
     for (int idx = 0; idx < HW; ++idx) {
       int y = idx / W, x = idx - y * W;
+
+      // ** skip masked pixels **
+      if (!distortInside_ && mask.at<uchar>(y, x) > 0) {
+        mx[idx] = float(x);
+        my[idx] = float(y);
+        continue;
+      }
+
+      // otherwise apply the deflection
       float dx = defX[(y + offY) * pW + (x + offX)] * strength_;
       float dy = defY[(y + offY) * pW + (x + offX)] * strength_;
       float xx = x + dx, yy = y + dy;
+
       // clamp
       mx[idx] = xx < 0 ? 0 : (xx > W - 1 ? W - 1 : xx);
       my[idx] = yy < 0 ? 0 : (yy > H - 1 ? H - 1 : yy);

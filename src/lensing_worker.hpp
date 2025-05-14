@@ -44,7 +44,8 @@ public:
 
   // Constructor
   LensingWorker(float strength = 1.0f, float softening = 30.0f,
-                int padFactor = 2, int nthreads = 1, float lowerRes = 1.0f);
+                int padFactor = 2, int nthreads = 1, float lowerRes = 1.0f,
+                bool distortInside = false);
 
   // Destructor
   ~LensingWorker();
@@ -119,6 +120,9 @@ private:
   // Some matrices we can reuse during lens application
   cv::Mat padded_;
   cv::Mat paddedF_;
+
+  // Are we distorting inside the mask?
+  bool distortInside_;
 
   // ================== Member Function Prototypes ==================
 

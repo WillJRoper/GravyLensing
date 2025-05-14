@@ -136,6 +136,7 @@ int main(int argc, char **argv) {
   float temporalSmooth = opts.temporalSmooth;
   float lowerRes = opts.lowerRes;
   int secondsPerBackground = opts.secondsPerBackground;
+  bool distortInside = opts.distortInside;
   const std::string modelPath = opts.modelPath;
 
   // Correct the number of threads to account for those that have
@@ -172,8 +173,8 @@ int main(int argc, char **argv) {
   segThread->start();
 
   // Lensing
-  auto lensWorker =
-      new LensingWorker(strength, softening, padFactor, nthreads, lowerRes);
+  auto lensWorker = new LensingWorker(strength, softening, padFactor, nthreads,
+                                      lowerRes, distortInside);
   QThread *lensThread = new QThread;
   lensWorker->moveToThread(lensThread);
   lensThread->start();
