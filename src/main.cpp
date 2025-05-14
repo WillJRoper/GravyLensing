@@ -29,6 +29,7 @@
 #include <QCoreApplication>
 #include <QMetaType>
 #include <QThread>
+#include <QTimer>
 
 // External includes
 #include <fftw3.h>
@@ -134,6 +135,7 @@ int main(int argc, char **argv) {
   int deviceIndex = opts.deviceIndex;
   float temporalSmooth = opts.temporalSmooth;
   float lowerRes = opts.lowerRes;
+  int secondsPerBackground = opts.secondsPerBackground;
   const std::string modelPath = opts.modelPath;
 
   // Correct the number of threads to account for those that have
@@ -179,11 +181,19 @@ int main(int argc, char **argv) {
   // Wire up signals/slots
   connectSignals(camFeed, segWorker, lensWorker, vp, backgrounds, debugGrid);
 
-  // 7) Prime initial background
+  // Prime initial background
   vp->setBackground(backgrounds->current());
   emit backgrounds->backgroundChanged(backgrounds->current());
 
-  // 8) Run!
+  // If we are updating each background every X seconds, set up a timer to do
+  // that. IF not secondsPerBackground is -1 and we don't do anything.
+  if (secondsPerBackground > 0) {
+    QTimer *timer = new QTimer();
+    QObject::connect(timer, &QTimer::timeout, backgrounds, &Backgrounds::next);
+    timer->start(secondsPerBackground * 1000);
+  }
+
+  // Run!
   int ret = app.exec();
 
   // 9) Cleanup threads

@@ -139,6 +139,7 @@ bool Backgrounds::next() {
   if (images_.empty())
     return false;
   currentIdx_ = (currentIdx_ + 1) % images_.size();
+  emit backgroundChanged(images_[currentIdx_]);
   return true;
 }
 
