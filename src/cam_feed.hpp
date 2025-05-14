@@ -1,4 +1,6 @@
 /**
+ * @file cam_feed.hpp
+ *
  * Camera feed extension for Gravy Lensing
  *
  * This extension captures frames from a camera feed using openCV.
@@ -19,36 +21,42 @@
 
 #pragma once
 
-#include <atomic>
-#include <iostream>
+// Qt includes
+#include <QObject>
+
+// External includes
 #include <opencv2/opencv.hpp>
 
-class CameraFeed {
+/**
+ * @brief CameraFeed class
+ *
+ * This class captures frames from a camera feed using openCV.
+ *
+ * It emits signals when a new frame is captured or if there is an error
+ * opening or reading the camera.
+ */
+class CameraFeed : public QObject {
+  Q_OBJECT
 
 public:
-  // Define a container for the latest frame
-  cv::Mat latestFrame_;
-
-  // Geometry of the camera feed
-  int width_;
-  int height_;
-
-  // Constructor
-  CameraFeed(int deviceIndex = 0, int width = 640, int height = 480);
-
-  // Destructor
+  CameraFeed(int deviceIndex = 0);
   ~CameraFeed();
 
-  /// Capture a frame from the camera
-  bool captureFrame();
+  /// Start continuous capture in this thread
+  Q_INVOKABLE void startCaptureLoop();
 
-  // Update the geometry of the camera feed
-  void updateGeometry(int width, int height);
+signals:
+  /// Emitted as soon as a new frame is ready
+  void frameCaptured(const cv::Mat &frame);
+
+  /// Emitted if there's an error opening or reading the camera
+  void captureError(const QString &msg);
 
 private:
-  /// Camera device index
-  int deviceIndex_;
+  std::atomic<bool> running_{false};
 
-  // OpenCV video capture object
+  bool initCamera(); // called from ctor
+
+  int deviceIndex_;
   cv::VideoCapture cap_;
 };

@@ -1,7 +1,7 @@
 /**
- * Backgrounds
+ * @file backgrounds.cpp
  *
- * This class loads a set of up to 10 background images from a specified
+ * This class loads a set of background images from a specified directory
  * and enables switching between them.
  *
  * This file is part of GravyLensing, a real-time gravitational lensing
@@ -20,13 +20,13 @@
  * You should have received a copy of the GNU General Public License
  * along with GravyLensing. If not, see <http://www.gnu.org/licenses/>.
  */
-#include "backgrounds.hpp"
-#include <algorithm>
-#include <cctype>
+
+// Standard includes
 #include <filesystem>
-#include <iostream>
-#include <opencv2/opencv.hpp>
 #include <string>
+
+// Local includes
+#include "backgrounds.hpp"
 
 namespace fs = std::filesystem;
 
@@ -34,6 +34,24 @@ namespace fs = std::filesystem;
 // by lower-case conversion)
 const std::vector<std::string> Backgrounds::kImageExts = {
     ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif", ".webp", ".svg"};
+
+/**
+ * @brief Setup the Background images.
+ *
+ * This function initializes the background images from the specified directory.
+ *
+ * @param dir The directory containing the background images.
+ *
+ * @return The Backgrounds object containing the loaded images.
+ */
+Backgrounds *initBackgrounds(const std::string &dir) {
+  Backgrounds *backgrounds = new Backgrounds(dir);
+  if (!backgrounds->load()) {
+    qFatal("No images found in directory: %s", dir.c_str());
+    return nullptr;
+  }
+  return backgrounds;
+}
 
 /**
  * @brief Backgrounds constructor
@@ -97,6 +115,7 @@ bool Backgrounds::load() {
  *
  * @param path path to the image
  * @param out output cv::Mat
+ *
  * @return true if the image was loaded successfully, false otherwise
  */
 bool Backgrounds::loadImage(const std::string &path, cv::Mat &out) {
@@ -146,6 +165,7 @@ bool Backgrounds::setIndex(size_t idx) {
   if (idx >= images_.size())
     return false;
   currentIdx_ = idx;
+  emit backgroundChanged(images_[currentIdx_]);
   return true;
 }
 

@@ -1,7 +1,7 @@
 /**
- * Backgrounds
+ * @file backgrounds.hpp
  *
- * This class loads a set of up to 10 background images from a specified
+ * This class loads a set of background images from a specified directory
  * and enables switching between them.
  *
  * This file is part of GravyLensing, a real-time gravitational lensing
@@ -22,11 +22,26 @@
  */
 #pragma once
 
-#include <opencv2/opencv.hpp>
+// Standard includes
 #include <string>
 #include <vector>
 
-class Backgrounds {
+// Qt includes
+#include <QDebug>
+#include <QObject>
+
+// External includes
+#include <opencv2/opencv.hpp>
+
+/**
+ * @brief Backgrounds class
+ *
+ * This class loads a set of background images from a specified directory
+ * and enables switching between them.
+ */
+class Backgrounds : public QObject {
+  Q_OBJECT
+
 public:
   /// @param dir  path to folder containing your images
   explicit Backgrounds(const std::string &dir);
@@ -54,6 +69,10 @@ public:
   int rows() const noexcept;
   int cols() const noexcept;
 
+signals:
+  /// Emitted when the background changes
+  void backgroundChanged(const cv::Mat &background);
+
 private:
   std::string dir_;
   std::vector<std::string> paths_;
@@ -66,3 +85,6 @@ private:
   /// helper to load a single image by path
   static bool loadImage(const std::string &path, cv::Mat &out);
 };
+
+// The getter called in main.cpp
+Backgrounds *initBackgrounds(const std::string &dir);

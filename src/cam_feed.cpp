@@ -1,4 +1,6 @@
 /**
+ * @file cam_feed.cpp
+ *
  * Camera feed extension for Gravy Lensing
  *
  * This extension captures frames from a camera feed using openCV.
@@ -17,102 +19,105 @@
  * along with GravyLensing. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "cam_feed.hpp"
-#include <atomic>
+// Standard includes
 #include <iostream>
-#include <mutex>
-#include <opencv2/opencv.hpp>
 #include <stdlib.h>
 
+// Qt includes
+#include <QCoreApplication>
+#include <QThread>
+
+// External includes
+#include <opencv2/opencv.hpp>
+
+// Local includes
+#include "cam_feed.hpp"
+
 /**
- * @brief Constructor for CameraFeed.
+ * @brief Constructor for the CameraFeed class.
  *
- * @param deviceIndex  Camera device index (default = 0)
+ * This constructor initializes the camera feed with the specified device index,
+ * width, and height.
  *
- * @return true if camera opened successfully
+ * @param deviceIndex The index of the camera device (default is 0).
  */
-CameraFeed::CameraFeed(int deviceIndex, int width, int height)
-    : deviceIndex_(deviceIndex), width_(width), height_(height) {
+CameraFeed::CameraFeed(int deviceIndex) : deviceIndex_(deviceIndex) {
 
-  // Open the camera
-  cap_.open(deviceIndex);
-
-  // Check if the camera opened successfully
-  if (!cap_.isOpened()) {
-    std::cerr << "Failed to open camera with index " << deviceIndex_ << "\n";
-    std::exit(EXIT_FAILURE);
+  // Initialize the camera feed and ensure it is opened successfully
+  if (!initCamera()) {
+    emit captureError("Failed to open camera " + QString::number(deviceIndex_));
   }
 
-  // Set the camera resolution to match the background (simplifies everything
-  // later on)
-  cap_.set(cv::CAP_PROP_FRAME_WIDTH, width_);
-  cap_.set(cv::CAP_PROP_FRAME_HEIGHT, height_);
-
-  // Report the maximum frame rate
-  double fps = cap_.get(cv::CAP_PROP_FPS);
-  std::cout << "Camera-reported FPS: " << fps << "\n";
+  std::cout << "[CameraFeed] Camera " << deviceIndex_
+            << " opened successfully.\n";
+  std::cout << "[CameraFeed] Camera resolution: "
+            << cap_.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
+            << cap_.get(cv::CAP_PROP_FRAME_HEIGHT) << "\n";
+  std::cout << "[CameraFeed] Camera FPS: " << cap_.get(cv::CAP_PROP_FPS)
+            << "\n";
+  std::cout << "[CameraFeed] Camera fourcc: " << cap_.get(cv::CAP_PROP_FOURCC)
+            << "\n";
+  std::cout << "[CameraFeed] Camera backend: " << cap_.get(cv::CAP_PROP_BACKEND)
+            << "\n";
 }
 
 /**
- * @brief Destructor for CameraFeed.
+ * @brief Destructor for the CameraFeed class.
  *
- * Closes the camera if it is open.
+ * This destructor releases the camera feed if it is opened.
  */
 CameraFeed::~CameraFeed() {
-  // Release the camera
-  if (cap_.isOpened()) {
+  if (cap_.isOpened())
     cap_.release();
-  }
 }
 
 /**
- * @brief Capture a frame from the camera.
+ * @brief Initialize the camera feed.
  *
- * @param frame  Output BGR image
+ * This function opens the camera device and sets the width and height of the
+ * camera feed.
  *
- * @return true if frame read successfully
+ * @return true if the camera is opened successfully, false otherwise.
  */
-bool CameraFeed::captureFrame() {
+bool CameraFeed::initCamera() {
 
-  // Is the camera open?
-  if (!cap_.isOpened()) {
-    std::cerr << "Camera not open\n";
+  // Check if the camera is already opened
+  if (cap_.isOpened())
+    cap_.release();
+
+  // Open the camera device
+  cap_.open(deviceIndex_);
+  if (!cap_.isOpened())
     return false;
-  }
-
-  // Try and grab a new frame with the lock
-  {
-    // grab() just queues the next frame; cheaper than read()
-    if (!cap_.grab()) {
-      std::cerr << "Failed to grab frame\n";
-      return false;
-    }
-
-    // retrieve() writes directly into your pre-allocated Mat
-    if (!cap_.retrieve(latestFrame_)) {
-      std::cerr << "Failed to retrieve frame\n";
-      return false;
-    }
-
-    // Mirror it horizontally so on-screen motion matches real motion
-    cv::flip(latestFrame_, latestFrame_, /*flipCode=*/1);
-  }
-
-  // No we are unlocked and have everything we need the rest of the code can
-  // do its thang...
 
   return true;
 }
 
 /**
- * @brief Update the geometry of the camera feed.
+ * @brief Start the camera capture loop.
  *
- * @param width  New width of the camera feed
- * @param height  New height of the camera feed
- * */
-void CameraFeed::updateGeometry(int width, int height) {
-  width_ = width;
-  height_ = height;
-  cap_.set(cv::CAP_PROP_FRAME_WIDTH, width);
-  cap_.set(cv::CAP_PROP_FRAME_HEIGHT, height);
+ * This function starts a loop that captures frames from the camera feed and
+ * emits the captured frames.
+ */
+void CameraFeed::startCaptureLoop() {
+
+  // Define a local reusable header for the frame
+  cv::Mat frame;
+
+  // Loop until the end of time (or until the thread is stopped)
+  while (QThread::currentThread()->isRunning() &&
+         !QCoreApplication::closingDown()) {
+
+    // Capture a frame from the camera
+    if (!cap_.grab() || !cap_.retrieve(frame)) {
+      emit captureError("Frame capture failed");
+      break;
+    }
+
+    // Flip the frame horizontally to ensure the correct orientation
+    cv::flip(frame, frame, /*flipCode=*/1);
+
+    // Emit the captured frame
+    emit frameCaptured(frame);
+  }
 }

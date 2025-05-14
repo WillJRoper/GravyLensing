@@ -114,7 +114,8 @@ include_directories(
 # List all source files under src/ directory
 set(SOURCES
   src/main.cpp
-  src/lens_mask.cpp
+  src/segmentation_worker.cpp 
+  src/lensing_worker.cpp
   src/viewport.cpp
   src/cam_feed.cpp
   src/backgrounds.cpp
@@ -128,12 +129,6 @@ add_executable(gravy_lens ${SOURCES})
 
 # Link OpenMP target (automatically adds appropriate compile & link flags)
 target_link_libraries(gravy_lens PRIVATE OpenMP::OpenMP_CXX)
-
-# Disable Qt's SIGNAL/SLOT macros so we don't break other libraries
-target_compile_definitions(gravy_lens
-  PRIVATE
-    QT_NO_KEYWORDS
-)
 
 # Place build output (binaries) one level above the build directory
 set_target_properties(gravy_lens PROPERTIES
