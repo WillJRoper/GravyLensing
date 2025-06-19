@@ -41,11 +41,13 @@
  * It returns both the selected rectangle and a binary mask of the same size.
  *
  * @param frame The image on which to select the ROI (modified for preview).
+ * @param flip If true, the preview will be mirrored horizontally.
  * @return A pair consisting of the selected cv::Rect and its binary mask as
  * cv::Mat.
  */
 static std::pair<cv::Rect, cv::Mat> selectROIAndMask(cv::Mat &frame,
                                                      bool flip) {
+
   // Mirror preview if requested
   if (flip) {
     cv::flip(frame, frame, 1);
@@ -109,9 +111,12 @@ static cv::Mat applyROIMaskAndCrop(const cv::Mat &src, const cv::Mat &mask,
  * width, and height.
  *
  * @param deviceIndex The index of the camera device (default is 0).
+ * @param flip Whether to flip the camera feed horizontally (default is false).
+ * @param selectROI Whether to allow the user to select a region of interest
+ *  (ROI) in the camera feed (default is false).
  */
-CameraFeed::CameraFeed(int deviceIndex, bool flip)
-    : deviceIndex_(deviceIndex), flip_(flip) {
+CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
+    : deviceIndex_(deviceIndex), flip_(flip), doingROI_(selectROI) {
 
   // Initialize the camera feed and ensure it is opened successfully
   if (!initCamera()) {
@@ -129,6 +134,11 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip)
             << "\n";
   std::cout << "[CameraFeed] Camera backend: " << cap_.get(cv::CAP_PROP_BACKEND)
             << "\n";
+
+  // If we aren't selecting an ROI we are done and can move on
+  if (!doingROI_) {
+    return;
+  }
 
   // Grab frame for ROI selection
   cv::Mat firstFrame;
@@ -187,7 +197,6 @@ void CameraFeed::startCaptureLoop() {
 
   // Define a local reusable header for the frame
   cv::Mat frame;
-  cv::Mat masked;
 
   // Loop until the end of time (or until the thread is stopped)
   while (QThread::currentThread()->isRunning() &&
@@ -205,10 +214,12 @@ void CameraFeed::startCaptureLoop() {
       cv::flip(frame, frame, 1);
     }
 
-    // Apply ROI mask and crop to ROI
-    masked = applyROIMaskAndCrop(frame, roiMask_, roiRect_);
-
-    // Emit the captured frame
-    emit frameCaptured(masked);
+    // Apply ROI mask, crop to ROI and emit if we are doing ROI selection,
+    // otherwise just emit the full frame
+    if (doingROI_) {
+      emit frameCaptured(applyROIMaskAndCrop(frame, roiMask_, roiRect_));
+    } else {
+      emit frameCaptured(frame);
+    }
   }
 }

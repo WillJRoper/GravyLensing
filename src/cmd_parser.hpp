@@ -48,6 +48,7 @@ public:
   int secondsPerBackground;
   bool distortInside;
   bool flip;
+  bool selectROI;
   std::string modelPath;
 
   // Constructor is also the parser
@@ -148,6 +149,13 @@ public:
                                   "Flip the camera feed horizontally?");
     parser.addOption(flipOption);
 
+    // selectROI <bool> (flag only; no argument)
+    QCommandLineOption selectROIOption(
+        QStringList() << "roi" << "selectROI",
+        "Select a region of interest (ROI) in the camera feed to apply the "
+        "lensing effect. If not set, the full frame is used.");
+    parser.addOption(selectROIOption);
+
     parser.process(app);
 
     // Validate required --nthreads
@@ -223,6 +231,7 @@ public:
 
     opts.distortInside = parser.isSet(distortInsideOption);
     opts.flip = parser.isSet(flipOption);
+    opts.selectROI = parser.isSet(selectROIOption);
 
     return opts;
   }

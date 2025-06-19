@@ -205,6 +205,11 @@ Options:
   --di, --distortInside                              Distort inside the mask?
   --flip                                             Flip the camera feed
                                                      horizontally?
+  --roi, --selectROI                                 Select a region of
+                                                     interest (ROI) in the
+                                                     camera feed to apply the
+                                                     lensing effect. If not set,
+                                                     the full frame is used.
 ```
 
 - Place background images (up to 10) in the `backgrounds/` directory.
