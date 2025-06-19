@@ -153,7 +153,7 @@ python get_models.py \
 
 ## Usage
 
-```bash
+```
 Usage: ./gravy_lens [options]
 GravyLensing applies a gravitational lensing effect to images based on people detected in a camera feed.
 
