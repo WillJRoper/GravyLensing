@@ -53,37 +53,46 @@ public:
   // Constructor is also the parser
   static CommandLineOptions parse(QApplication &app) {
     QCommandLineParser parser;
-    parser.setApplicationDescription("Your App Description");
+    parser.setApplicationDescription(
+        "GravyLensing applies a gravitational lensing effect to images based "
+        "on people detected in a camera feed.");
     parser.addHelpOption();
 
     // --nthreads <int> (required)
-    QCommandLineOption nthreadsOption(QStringList() << "n" << "nthreads",
-                                      "Number of threads (must be >= 2).",
-                                      "nthreads");
+    QCommandLineOption nthreadsOption(
+        QStringList() << "n" << "nthreads",
+        "Number of CPU threads used in the calculation (must be >= 2).",
+        "nthreads");
     parser.addOption(nthreadsOption);
 
     // --strength <float> (default 0.1)
-    QCommandLineOption strengthOption(QStringList() << "s" << "strength",
-                                      "Strength factor (float).", "strength",
-                                      "0.1");
+    QCommandLineOption strengthOption(
+        QStringList() << "s" << "strength",
+        "Strength factor for the lensing effect (float, default=0.1).",
+        "strength", "0.1");
     parser.addOption(strengthOption);
 
     // --softening <float> (default 30.0)
-    QCommandLineOption softeningOption(QStringList() << "f" << "softening",
-                                       "Softening radius (float).", "softening",
-                                       "30.0");
+    QCommandLineOption softeningOption(
+        QStringList() << "f" << "softening",
+        "Softening radius in pixels applied to the lensing effect (float, "
+        "default=30.0).",
+        "softening", "30.0");
     parser.addOption(softeningOption);
 
     // --modelSize <int> (default 512)
-    QCommandLineOption modelSizeOption(QStringList() << "m" << "modelSize",
-                                       "Segmentation model size (int).",
-                                       "modelSize", "512");
+    QCommandLineOption modelSizeOption(
+        QStringList() << "m" << "modelSize",
+        "Segmentation model size, bigger means more accurate people but at the "
+        "expense of frame rate (int, default=512).",
+        "modelSize", "512");
     parser.addOption(modelSizeOption);
 
     // --device-index <int> (default 0)
-    QCommandLineOption deviceIndexOption(QStringList() << "d" << "deviceIndex",
-                                         "Device index (int).", "deviceIndex",
-                                         "0");
+    QCommandLineOption deviceIndexOption(
+        QStringList() << "d" << "deviceIndex",
+        "Device index, i.e. which camera to use (int, default=0).",
+        "deviceIndex", "0");
     parser.addOption(deviceIndexOption);
 
     // --debug-grid  (flag only; no argument)
@@ -93,9 +102,9 @@ public:
     parser.addOption(debugGridOption);
 
     // --pad-factor <int> (default 2)
-    QCommandLineOption padFactorOption(QStringList() << "p" << "padFactor",
-                                       "Padding factor for FFT (int).",
-                                       "padFactor", "2");
+    QCommandLineOption padFactorOption(
+        QStringList() << "p" << "padFactor",
+        "Padding factor for FFT (int, default=2).", "padFactor", "2");
     parser.addOption(padFactorOption);
 
     // --model-path <string> (default "models/deeplabv3_mobilenet_v3_large.pt")
@@ -108,30 +117,35 @@ public:
     // --temporal smooth <float> (default 0.6)
     QCommandLineOption temporalSmoothOption(
         QStringList() << "t" << "temporalSmooth",
-        "Temporal frame smoothing factor (float).", "temporalSmooth", "0.25");
+        "Temporal frame smoothing factor, i.e. how much of previous frames is "
+        "used to smooth out temporal flucations in the person detection mask "
+        "(float, default=0.25).",
+        "temporalSmooth", "0.25");
     parser.addOption(temporalSmoothOption);
 
     // lowerRes <float> (default 1.0)
     QCommandLineOption lowerResOption(
         QStringList() << "lr" << "lowerRes",
-        "Lower resolution factor for the lensing effect (float).", "lowerRes",
-        "1.0");
+        "Lower resolution factor for the lensing effect (float, default=1.0).",
+        "lowerRes", "1.0");
     parser.addOption(lowerResOption);
 
     // secondsPerBackground <int> (default -1, i.e infinite)
     QCommandLineOption secondsPerBackgroundOption(
         QStringList() << "sb" << "secondsPerBackground",
-        "Seconds per background (int).", "secondsPerBackground", "-1");
+        "Seconds per background image, if -1 then background images are "
+        "selected through the 0-9 keys (int, default=-1).",
+        "secondsPerBackground", "-1");
     parser.addOption(secondsPerBackgroundOption);
 
     // distortInside <bool> (flag only; no argument)
     QCommandLineOption distortInsideOption(
-        QStringList() << "di" << "distortInside", "Distort inside the mask.");
+        QStringList() << "di" << "distortInside", "Distort inside the mask?");
     parser.addOption(distortInsideOption);
 
     // flip <bool> (flag only; no argument)
     QCommandLineOption flipOption(QStringList() << "flip",
-                                  "Flip the camera feed horizontally.");
+                                  "Flip the camera feed horizontally?");
     parser.addOption(flipOption);
 
     parser.process(app);
