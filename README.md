@@ -71,26 +71,26 @@ For libtorch, see their [installation instructions](https://pytorch.org/). You w
 
 ## Build with CMake
 
-   To build the release build:
+To build the release build:
 
-   ```bash
-   cmake -B build \
-     -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
-     -DCMAKE_BUILD_TYPE=Release
-   cmake --build build --config Release -- -j$(nproc)
-   ```
+```bash
+cmake -B build \
+  -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -- -j$(nproc)
+```
 
-   Note that you may need to point directly to FFTW if it is installed in a nonstandard location:
+Note that you may need to point directly to FFTW if it is installed in a nonstandard location:
 
-   ```bash
-   cmake -B build \
-     -DFFTW3_ROOT=/path/to/fftw3 \
-     -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
-     -DCMAKE_BUILD_TYPE=Release
-   cmake --build build --config Release -- -j$(nproc)
-   ```
+```bash
+cmake -B build \
+  -DFFTW3_ROOT=/path/to/fftw3 \
+  -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release -- -j$(nproc)
+```
 
-   The executable `gravy_lens` will then be placed in the project root.
+The executable `gravy_lens` will then be placed in the project root.
 
 ## Generating Segementation models
 
@@ -154,15 +154,62 @@ python get_models.py \
 ## Usage
 
 ```bash
-./gravy_lens \
-  --nthreads <int>       # number of FFTW threads (≥2)
-  [--strength <float>]    # lens strength factor (default 0.1)
-  [--softening <float>]   # softening radius (default 30.0)
-  [--maskScale <int>]     # segmentation downscale factor (default 4)
-  [--deviceIndex <int>]   # Torch device index (default 0)
-  [--padFactor <int>]     # FFT padding factor (default 2)
-  [--modelPath <string>]  # path to segmentation .pt model
-  [--debugGrid]           # show mask & camera feed grid
+Usage: ./gravy_lens [options]
+GravyLensing applies a gravitational lensing effect to images based on people detected in a camera feed.
+
+Options:
+  -h, --help                                         Displays help on
+                                                     commandline options.
+  --help-all                                         Displays help, including
+                                                     generic Qt options.
+  -n, --nthreads <nthreads>                          Number of CPU threads used
+                                                     in the calculation (must be
+                                                     >= 2).
+  -s, --strength <strength>                          Strength factor for the
+                                                     lensing effect (float,
+                                                     default=0.1).
+  -f, --softening <softening>                        Softening radius in pixels
+                                                     applied to the lensing
+                                                     effect (float,
+                                                     default=30.0).
+  -m, --modelSize <modelSize>                        Segmentation model size,
+                                                     bigger means more accurate
+                                                     people but at the expense
+                                                     of frame rate (int,
+                                                     default=512).
+  -d, --deviceIndex <deviceIndex>                    Device index, i.e. which
+                                                     camera to use (int,
+                                                     default=0).
+  -g, --debugGrid                                    Show a debugging grid with
+                                                     the camera feed, mask, and
+                                                     lensed image.
+  -p, --padFactor <padFactor>                        Padding factor for FFT
+                                                     (int, default=2).
+  --mp, --modelPath <modelPath>                      Path to the segmentation
+                                                     model (string).
+  -t, --temporalSmooth <temporalSmooth>              Temporal frame smoothing
+                                                     factor, i.e. how much of
+                                                     previous frames is used to
+                                                     smooth out temporal
+                                                     flucations in the person
+                                                     detection mask (float,
+                                                     default=0.25).
+  --lr, --lowerRes <lowerRes>                        Lower resolution factor
+                                                     for the lensing effect
+                                                     (float, default=1.0).
+  --sb, --secondsPerBackground <secondsPerBackground Seconds per background
+  >                                                  image, if -1 then
+                                                     background images are
+                                                     selected through the 0-9
+                                                     keys (int, default=-1).
+  --di, --distortInside                              Distort inside the mask?
+  --flip                                             Flip the camera feed
+                                                     horizontally?
+  --roi, --selectROI                                 Select a region of
+                                                     interest (ROI) in the
+                                                     camera feed to apply the
+                                                     lensing effect. If not set,
+                                                     the full frame is used.
 ```
 
 - Place background images (up to 10) in the `backgrounds/` directory.

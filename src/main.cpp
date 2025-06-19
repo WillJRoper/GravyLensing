@@ -137,6 +137,8 @@ int main(int argc, char **argv) {
   float lowerRes = opts.lowerRes;
   int secondsPerBackground = opts.secondsPerBackground;
   bool distortInside = opts.distortInside;
+  bool flip = opts.flip;
+  bool selectROI = opts.selectROI;
   const std::string modelPath = opts.modelPath;
 
   // Correct the number of threads to account for those that have
@@ -156,7 +158,7 @@ int main(int argc, char **argv) {
   // Create workers & threads
 
   // Camera feed
-  CameraFeed *camFeed = new CameraFeed(deviceIndex);
+  CameraFeed *camFeed = new CameraFeed(deviceIndex, flip, selectROI);
   QThread *camThread = new QThread;
   camFeed->moveToThread(camThread);
   QObject::connect(camThread, &QThread::started, camFeed,

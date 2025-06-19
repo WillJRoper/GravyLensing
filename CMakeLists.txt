@@ -85,7 +85,7 @@ find_package(Threads REQUIRED)
 # LibTorch (PyTorch C++ API)
 find_package(Torch REQUIRED)
 # Qt6 Widgets for GUI
-find_package(Qt6 COMPONENTS Widgets REQUIRED)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 # ============================================================================
 # Qt Configuration
@@ -101,11 +101,11 @@ set(CMAKE_AUTORCC OFF)
 
 # Project source directory
 include_directories("${CMAKE_SOURCE_DIR}/src")
+
 # Third-party includes
 include_directories(
   ${OpenCV_INCLUDE_DIRS}
   ${TORCH_INCLUDE_DIRS}
-  ${Qt6Widgets_INCLUDE_DIRS}
 )
 
 # ============================================================================
@@ -139,11 +139,13 @@ set_target_properties(gravy_lens PROPERTIES
 # Linker settings
 
 target_link_libraries(gravy_lens PRIVATE
+  Qt6::Core
+  Qt6::Gui       
+  Qt6::Widgets
   ${OpenCV_LIBS}
   Threads::Threads
   ${FFTW3_LIBRARIES}
   ${TORCH_LIBRARIES}
-  Qt6::Widgets
 )
 
 if(APPLE)
