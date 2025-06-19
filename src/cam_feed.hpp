@@ -53,10 +53,15 @@ signals:
   void captureError(const QString &msg);
 
 private:
-  std::atomic<bool> running_{false};
+  bool initCamera(); ///< Called by ctor to open cap_
 
-  bool initCamera(); // called from ctor
-
+  // The device index for the camera (0 for default camera)
   int deviceIndex_;
+
+  // OpenCV video capture object
   cv::VideoCapture cap_;
+
+  // ROI selection and mask
+  cv::Rect roiRect_;
+  cv::Mat roiMask_;
 };
