@@ -47,6 +47,7 @@ public:
   float lowerRes;
   int secondsPerBackground;
   bool distortInside;
+  bool flip;
   std::string modelPath;
 
   // Constructor is also the parser
@@ -128,6 +129,11 @@ public:
         QStringList() << "di" << "distortInside", "Distort inside the mask.");
     parser.addOption(distortInsideOption);
 
+    // flip <bool> (flag only; no argument)
+    QCommandLineOption flipOption(QStringList() << "flip",
+                                  "Flip the camera feed horizontally.");
+    parser.addOption(flipOption);
+
     parser.process(app);
 
     // Validate required --nthreads
@@ -202,6 +208,7 @@ public:
     }
 
     opts.distortInside = parser.isSet(distortInsideOption);
+    opts.flip = parser.isSet(flipOption);
 
     return opts;
   }

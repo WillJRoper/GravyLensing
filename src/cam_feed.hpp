@@ -39,7 +39,7 @@ class CameraFeed : public QObject {
   Q_OBJECT
 
 public:
-  CameraFeed(int deviceIndex = 0);
+  CameraFeed(int deviceIndex = 0, bool flip = false);
   ~CameraFeed();
 
   /// Start continuous capture in this thread
@@ -64,4 +64,7 @@ private:
   // ROI selection and mask
   cv::Rect roiRect_;
   cv::Mat roiMask_;
+
+  // Are we flipping the camera feed horizontally?
+  bool flip_ = false;
 };

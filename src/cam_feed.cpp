@@ -44,9 +44,18 @@
  * @return A pair consisting of the selected cv::Rect and its binary mask as
  * cv::Mat.
  */
-static std::pair<cv::Rect, cv::Mat> selectROIAndMask(cv::Mat &frame) {
-  // Mirror preview
-  // cv::flip(frame, frame, 1);
+static std::pair<cv::Rect, cv::Mat> selectROIAndMask(cv::Mat &frame,
+                                                     bool flip) {
+  // Mirror preview if requested
+  if (flip) {
+    cv::flip(frame, frame, 1);
+  }
+
+  // Overlay instructions to the user
+  const std::string instructions =
+      "Drag to select Region of Interest: ENTER/SPACE confirm, 'c' cancel";
+  cv::putText(frame, instructions, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
+              0.7, cv::Scalar(255, 255, 255), 2);
 
   // Show selector
   cv::namedWindow("Select ROI", cv::WINDOW_AUTOSIZE);
@@ -101,7 +110,8 @@ static cv::Mat applyROIMaskAndCrop(const cv::Mat &src, const cv::Mat &mask,
  *
  * @param deviceIndex The index of the camera device (default is 0).
  */
-CameraFeed::CameraFeed(int deviceIndex) : deviceIndex_(deviceIndex) {
+CameraFeed::CameraFeed(int deviceIndex, bool flip)
+    : deviceIndex_(deviceIndex), flip_(flip) {
 
   // Initialize the camera feed and ensure it is opened successfully
   if (!initCamera()) {
@@ -128,15 +138,11 @@ CameraFeed::CameraFeed(int deviceIndex) : deviceIndex_(deviceIndex) {
   }
 
   // Delegate to static helper
-  std::tie(roiRect_, roiMask_) = selectROIAndMask(firstFrame);
+  std::tie(roiRect_, roiMask_) = selectROIAndMask(firstFrame, flip_);
 
   std::cout << "[CameraFeed] ROI: (x, y)=(" << roiRect_.x << ", " << roiRect_.y
             << ") " << "widthxheight=" << roiRect_.width << "x"
             << roiRect_.height << "\n";
-
-  // Report some info about the ROI mask
-  std::cout << "[CameraFeed] ROI mask size: " << roiMask_.size()
-            << ", type: " << roiMask_.type() << "\n";
 }
 
 /**
@@ -181,7 +187,6 @@ void CameraFeed::startCaptureLoop() {
 
   // Define a local reusable header for the frame
   cv::Mat frame;
-  cv::Mat flipped;
   cv::Mat masked;
 
   // Loop until the end of time (or until the thread is stopped)
@@ -195,8 +200,10 @@ void CameraFeed::startCaptureLoop() {
       break;
     }
 
-    // Flip the frame horizontally to ensure the correct orientation
-    // cv::flip(frame, flipped, 1);
+    // Flip the frame horizontally if requested
+    if (flip_) {
+      cv::flip(frame, frame, 1);
+    }
 
     // Apply ROI mask and crop to ROI
     masked = applyROIMaskAndCrop(frame, roiMask_, roiRect_);
