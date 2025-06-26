@@ -36,126 +36,75 @@
 #include <opencv2/opencv.hpp>
 
 // Local includes
+#include "VisionSegmentationWorker.hpp"
 #include "backgrounds.hpp"
 #include "cam_feed.hpp"
 #include "cmd_parser.hpp"
 #include "lensing_worker.hpp"
-#include "segmentation_worker.hpp"
 #include "viewport.hpp"
 
-// Define the path to the background images (this is constant)
+// Path to background images
 const std::string bgDir = "backgrounds/";
 
 // Register cv::Mat as a Qt metatype
 Q_DECLARE_METATYPE(cv::Mat)
 
 /**
- * @brief Connected all the signals and slots.
- *
- * This function connects the signals and slots between the camera feed,
- * segmentation worker, lensing worker, and the viewport.
- *
- * @param camFeed The camera feed object.
- * @param segWorker The segmentation worker object.
- * @param lensWorker The lensing worker object.
- * @param vp The viewport object.
- * @param backgrounds The backgrounds object.
- * @param debugGrid Whether to enable the debug grid.
+ * @brief Connect the static parts of the pipeline (lensing and UI).
  */
-void connectSignals(CameraFeed *camFeed, SegmentationWorker *segWorker,
-                    LensingWorker *lensWorker, ViewPort *vp,
-                    Backgrounds *backgrounds, bool debugGrid) {
-
-  // First the main steps of the calculation:
-  //      Frame -> Segmentation - > Lensing - > ViewPort
-
-  // Camera → Segmentation (New frame)
-  QObject::connect(camFeed, &CameraFeed::frameCaptured, segWorker,
-                   &SegmentationWorker::onFrame, Qt::QueuedConnection);
-
-  // Segmentation → Lensing (New mask)
-  QObject::connect(segWorker, &SegmentationWorker::maskReady, lensWorker,
-                   &LensingWorker::onMask, Qt::QueuedConnection);
-
-  // ViewPort ← Lensing (New lensed image)
+void connectCoreSignals(CameraFeed *camFeed, LensingWorker *lensWorker,
+                        ViewPort *vp, Backgrounds *backgrounds,
+                        bool debugGrid) {
+  // Lensing → ViewPort
   QObject::connect(lensWorker, &LensingWorker::lensedReady, vp,
                    &ViewPort::setLens, Qt::QueuedConnection);
 
-  // Next connect up and the things that run when the background changes:
-
-  // Backgrounds → Segmentation (New background)
-  QObject::connect(backgrounds, &Backgrounds::backgroundChanged, segWorker,
-                   &SegmentationWorker::onBackgroundChange,
-                   Qt::QueuedConnection);
-
-  // Background switches from UI → LensingWorker
+  // Background → Lensing
   QObject::connect(backgrounds, &Backgrounds::backgroundChanged, lensWorker,
                    &LensingWorker::onBackgroundChange, Qt::QueuedConnection);
 
-  // Handle the debug grid specific connections for extra displays in the
-  // viewport
   if (debugGrid) {
-
-    // ViewPort ← Camera (raw display)
+    // Raw camera preview
     QObject::connect(camFeed, &CameraFeed::frameCaptured, vp,
                      &ViewPort::setImage, Qt::QueuedConnection);
-
-    // ViewPort ← Segmentation (mask display, if in debug)
-    QObject::connect(segWorker, &SegmentationWorker::maskReady, vp,
-                     &ViewPort::setMask, Qt::QueuedConnection);
-
-    // Also update the UI display when background changes
+    // Show background in debug UI
     QObject::connect(backgrounds, &Backgrounds::backgroundChanged, vp,
                      &ViewPort::setBackground, Qt::QueuedConnection);
   }
 }
 
-/*
- * @brief Main function for the GravyLensing application.
- *
- * This function initializes the application, parses command-line options,
- * sets up the camera feed, segmentation, and lensing workers, and starts
- * the event loop.
- *
- * @param argc The number of command-line arguments.
- * @param argv The command-line arguments.
- * @return int The exit code of the application.
+/**
+ * @brief Main function.
  */
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
 
-  // Parse options
+  // Parse CLI options
   CommandLineOptions opts = CommandLineOptions::parse(app);
-  int nthreads = opts.nthreads;
+  int nthreads = opts.nthreads - 3; // reserve for Qt
   float strength = opts.strength;
   float softening = opts.softening;
   int padFactor = opts.padFactor;
   bool debugGrid = opts.debugGrid;
-  int modelSize = opts.modelSize;
+  int modelSize = opts.modelSize; // unused by Vision
   int deviceIndex = opts.deviceIndex;
-  float temporalSmooth = opts.temporalSmooth;
-  float lowerRes = opts.lowerRes;
+  float temporalSmooth = opts.temporalSmooth; // unused by Vision
+  float lowerRes = opts.lowerRes;             // unused by Vision
   int secondsPerBackground = opts.secondsPerBackground;
   bool distortInside = opts.distortInside;
   bool flip = opts.flip;
   bool selectROI = opts.selectROI;
-  const std::string modelPath = opts.modelPath;
-
-  // Correct the number of threads to account for those that have
-  // been taken by Qt
-  nthreads -= 3;
+  const std::string modelPath = opts.modelPath; // unused by Vision
 
   // Init FFTW threading
   fftwf_init_threads();
   fftwf_plan_with_nthreads(nthreads);
 
-  // Load backgrounds from the specified directory
+  // Load backgrounds
   Backgrounds *backgrounds = initBackgrounds(bgDir);
 
   // Create UI
   ViewPort *vp = initViewport(backgrounds, debugGrid);
-
-  // Create workers & threads
 
   // Camera feed
   CameraFeed *camFeed = new CameraFeed(deviceIndex, flip, selectROI);
@@ -167,52 +116,59 @@ int main(int argc, char **argv) {
                    [&](const QString &err) { qWarning() << err; });
   camThread->start();
 
-  // Segmentation
-  auto segWorker = new SegmentationWorker(modelPath, modelSize, nthreads,
-                                          temporalSmooth, lowerRes);
+  // Vision‐based segmentation
+  VisionSegmentationWorker *segWorker = new VisionSegmentationWorker;
   QThread *segThread = new QThread;
   segWorker->moveToThread(segThread);
   segThread->start();
 
-  // Lensing
-  auto lensWorker = new LensingWorker(strength, softening, padFactor, nthreads,
-                                      lowerRes, distortInside);
+  // Lensing worker
+  LensingWorker *lensWorker = new LensingWorker(
+      strength, softening, padFactor, nthreads, lowerRes, distortInside);
   QThread *lensThread = new QThread;
   lensWorker->moveToThread(lensThread);
   lensThread->start();
 
-  // Wire up signals/slots
-  connectSignals(camFeed, segWorker, lensWorker, vp, backgrounds, debugGrid);
+  // Core signal wiring
+  connectCoreSignals(camFeed, lensWorker, vp, backgrounds, debugGrid);
+
+  // Camera → Segmentation
+  QObject::connect(camFeed, &CameraFeed::frameCaptured, segWorker,
+                   &VisionSegmentationWorker::onFrame, Qt::QueuedConnection);
+
+  // Segmentation → Lensing
+  QObject::connect(segWorker, &VisionSegmentationWorker::maskReady, lensWorker,
+                   &LensingWorker::onMask, Qt::QueuedConnection);
 
   // Prime initial background
   vp->setBackground(backgrounds->current());
   emit backgrounds->backgroundChanged(backgrounds->current());
 
-  // If we are updating each background every X seconds, set up a timer to do
-  // that. IF not secondsPerBackground is -1 and we don't do anything.
+  // Rotate backgrounds if desired
   if (secondsPerBackground > 0) {
-    QTimer *timer = new QTimer();
+    QTimer *timer = new QTimer;
     QObject::connect(timer, &QTimer::timeout, backgrounds, &Backgrounds::next);
     timer->start(secondsPerBackground * 1000);
   }
 
-  // Run!
+  // Start Qt event loop
   int ret = app.exec();
 
-  // 9) Cleanup threads
+  // Cleanup
   segThread->quit();
   segThread->wait();
   lensThread->quit();
   lensThread->wait();
   camThread->quit();
   camThread->wait();
-
   delete camFeed;
   delete segWorker;
   delete lensWorker;
   delete camThread;
   delete segThread;
   delete lensThread;
+  delete backgrounds;
+  delete vp;
 
   return ret;
 }
