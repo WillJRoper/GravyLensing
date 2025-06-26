@@ -23,15 +23,13 @@
 
 // Standard includes
 #include <iostream>
+#include <opencv2/imgproc.hpp>
 
 // Local includes
 #include "segmentation_worker.hpp"
 
 /**
  * @brief Constructor for the SegmentationWorker class.
- *
- * This constructor initializes the segmentation model and sets up the device
- * for PyTorch operations.
  *
  * @param modelPath The path to the segmentation model.
  * @param modelSize The size of the model (default is 512).
@@ -44,194 +42,43 @@
 SegmentationWorker::SegmentationWorker(const std::string &modelPath,
                                        int modelSize, int nthreads,
                                        float temporalSmooth, float lowerRes)
-    : modelPath_(modelPath), fastW_(modelSize), fastH_(modelSize),
-      nthreads_(nthreads), device_(pickDevice()),
-      temporalSmooth_(temporalSmooth), lowerRes_(lowerRes) {
+    : nthreads_(nthreads), lowerRes_(lowerRes),
+      temporalSmooth_(temporalSmooth) {
 
-  std::cout << "[SegmentationWorker] Initializing segmentation model...\n";
-  std::cout << "[SegmentationWorker] Using device: " << device_ << "\n";
-  std::cout << "[SegmentationWorker] Model size: " << fastW_ << "x" << fastH_
-            << "\n";
-  std::cout << "[SegmentationWorker] Temporal smoothing: " << temporalSmooth_
-            << "\n";
-
-  // We need to set up the fixed size tensors we'll need for the model
-  smallFrame_.create(fastH_, fastW_, CV_8UC3);
-  rgbFrame_.create(fastH_, fastW_, CV_8UC3);
-  fastMask_.create(fastH_, fastW_, CV_8UC1);
-  prevPersonProb_.create(fastH_, fastW_, CV_8UC1);
-  smoothMask_.create(fastH_, fastW_, CV_8UC1);
-
-  // Set up the segmentation model
-  setupSegmentationModel(modelPath);
-
-  std::cout << "[SegmentationWorker] Loaded model from " << modelPath_ << "\n";
-}
-
-/**
- * @brief Set up the segmentation model.
- *
- * This function loads the segmentation model from the specified path and
- * prepares it for inference.
- *
- * @param modelPath The path to the segmentation model.
- */
-void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
-  try {
-    // Load the segmentation model
-    segmentModel_ = torch::jit::load(modelPath_, device_);
-    segmentModel_.to(device_);
-    segmentModel_.eval();
-  } catch (const c10::Error &e) {
-    emit segmentationError("Failed to load the segmentation model: " +
-                           std::string(e.what()));
-  }
-
-#ifdef USE_MPS
-  // Allocate a CPU tensor for staging
-  inputCpuTensor_ = torch::empty(
-      {1, 3, fastH_, fastW_},
-      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
-#endif
-
-  // Allocate the device tensor (empty for now)
-  inputTensor_ = torch::empty(
-      {1, 3, fastH_, fastW_},
-      torch::TensorOptions().dtype(torch::kFloat32).device(device_));
+  // Create initial subtractor
+  backSub_ = cv::createBackgroundSubtractorKNN(1000, 400, false);
 }
 
 void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
+  // 1) KNN subtract
+  cv::Mat fgMask;
+  backSub_->apply(frame, fgMask, /*learningRate=*/0.01);
 
-  // Downsample the frame to the model size
-  cv::resize(frame, smallFrame_, cv::Size(fastW_, fastH_), 0, 0,
-             cv::INTER_LINEAR);
+  // 2) Morphological clean (optional)
+  int msize = 10;
+  auto kern = cv::getStructuringElement(cv::MORPH_ELLIPSE, {msize, msize});
+  cv::morphologyEx(fgMask, fgMask, cv::MORPH_CLOSE, kern);
+  cv::morphologyEx(fgMask, fgMask, cv::MORPH_OPEN, kern);
 
-  // Convert from BGR to RGB for Torch
-  cv::cvtColor(smallFrame_, rgbFrame_, cv::COLOR_BGR2RGB);
-
-#ifdef USE_MPS
-
-  // COPY & NORMALIZE on CPU staging tensor
-  float *cpu_ptr = inputCpuTensor_.data_ptr<float>();
-  const int HW = fastH_ * fastW_;
-#pragma omp parallel for num_threads(nthreads_)
-  for (int y = 0; y < fastH_; ++y) {
-    const cv::Vec3b *row = rgbFrame_.ptr<cv::Vec3b>(y);
-    for (int x = 0; x < fastW_; ++x) {
-      int idx = y * fastW_ + x;
-      cpu_ptr[0 * HW + idx] = row[x][0] / 255.f;
-      cpu_ptr[1 * HW + idx] = row[x][1] / 255.f;
-      cpu_ptr[2 * HW + idx] = row[x][2] / 255.f;
-    }
-  }
-  // Normalize channels (torch ops on CPU)
-  auto tc = inputCpuTensor_;
-  tc[0][0].sub_(0.485f).div_(0.229f);
-  tc[0][1].sub_(0.456f).div_(0.224f);
-  tc[0][2].sub_(0.406f).div_(0.225f);
-
-  // COPY CPU staging → GPU device tensor
-  inputTensor_.copy_(inputCpuTensor_, /*non_blocking=*/true);
-
-  // RUN inference on GPU
-  static const auto forwardMethod = segmentModel_.get_method("forward");
-  auto out_iv = forwardMethod({inputTensor_});
-
-  // Unwrap IValue → logits tensor:
-  torch::Tensor logits;
-  if (out_iv.isTensor())
-    logits = out_iv.toTensor();
-  else if (out_iv.isTuple())
-    logits = out_iv.toTuple()->elements()[0].toTensor();
-  else if (out_iv.isGenericDict())
-    logits = out_iv.toGenericDict().at("out").toTensor();
-  else {
-    std::cerr << "[SemgmentationWorker] Bad IValue\n";
-    return;
-  }
-
-  // Bring logits back to CPU, pick class
-  torch::Tensor probs = logits.squeeze(0).softmax(0);
-
-  // Extract the “person” channel (say label 15) and transfer to CPU
-  torch::Tensor personProb_t = probs[kPersonClass_].to(torch::kCPU);
-
-#else
-
-  // Copy into pre-allocated tensor and normalize to [0,1]
-  float *tptr = inputTensor_.data_ptr<float>();
-#pragma omp parallel for num_threads(nthreads_)
-  for (int y = 0; y < fastH_; ++y) {
-    const cv::Vec3b *row = rgbFrame_.ptr<cv::Vec3b>(y);
-    for (int x = 0; x < fastW_; ++x) {
-      tptr[0 * fastH_ * fastW_ + y * fastW_ + x] = row[x][0] / 255.f;
-      tptr[1 * fastH_ * fastW_ + y * fastW_ + x] = row[x][1] / 255.f;
-      tptr[2 * fastH_ * fastW_ + y * fastW_ + x] = row[x][2] / 255.f;
-    }
-  }
-  auto tt = inputTensor_;
-  tt[0][0].sub_(0.485f).div_(0.229f);
-  tt[0][1].sub_(0.456f).div_(0.224f);
-  tt[0][2].sub_(0.406f).div_(0.225f);
-
-  // Run the model
-  torch::NoGradGuard no_grad;
-  auto out_iv = segmentModel_.forward({inputTensor_});
-  torch::Tensor logits;
-  if (out_iv.isTensor())
-    logits = out_iv.toTensor();
-  else if (out_iv.isTuple())
-    logits = out_iv.toTuple()->elements()[0].toTensor();
-  else if (out_iv.isGenericDict())
-    logits = out_iv.toGenericDict().at("out").toTensor();
-  else {
-    std::cerr << "Unexpected IValue from segmentation\n";
-    return;
-  }
-
-  // Convert logits → class map
-  torch::Tensor probs = logits.squeeze(0).softmax(0);
-
-  // Extract the “person” channel (say label 15)
-  torch::Tensor personProb_t = probs[dPersonClass_];
-
-#endif
-
-  // Convert to an OpenCV Mat (CV_32F)
-  cv::Mat newPersonProb(fastH_, fastW_, CV_32F,
-                        (void *)personProb_t.data_ptr<float>());
-
-  // Initialize or EMA-blend
-  if (!havePrevProb_) {
-    prevPersonProb_ = newPersonProb.clone();
-    havePrevProb_ = true;
+  // 4) EMA blend into prevMaskFloat_
+  if (!havePrevMask_) {
+    prevMaskFloat_ = fgMask.clone();
+    havePrevMask_ = true;
   } else {
-    // prev = α*new + (1–α)*prev
-    cv::addWeighted(newPersonProb, temporalSmooth_, prevPersonProb_,
-                    1.0f - temporalSmooth_, 0.0, prevPersonProb_);
+    cv::addWeighted(fgMask, temporalSmooth_, prevMaskFloat_,
+                    1.0f - temporalSmooth_, 0.0, prevMaskFloat_);
   }
 
-  // Threshold the smoothed probability map into a mask
-  cv::threshold(prevPersonProb_, smoothMask_, 0.5, 255, cv::THRESH_BINARY);
+  // 5) Threshold the smoothed float mask back to binary 0/1
+  cv::Mat binSmooth;
+  cv::threshold(fgMask, binSmooth, 0.5, 1.0, cv::THRESH_BINARY);
 
-  smoothMask_.convertTo(fastMask_, CV_8U);
-
-  // Close small holes
-  cv::morphologyEx(fastMask_, fastMask_, cv::MORPH_CLOSE,
-                   cv::getStructuringElement(cv::MORPH_ELLIPSE, {5, 5}));
-
-  // Drop tiny components
-  std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(fastMask_, contours, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
-  for (auto &c : contours) {
-    if (cv::contourArea(c) < minBlobArea)
-      cv::drawContours(fastMask_, std::vector<std::vector<cv::Point>>{c}, 0, 0,
-                       -1);
-  }
-
-  // Then upsample + post-process as before
-  cv::resize(fastMask_, latestMask_, latestMask_.size(), 0, 0,
+  // 6) Upsample to output size
+  cv::resize(binSmooth, latestMask_, latestMask_.size(), 0, 0,
              cv::INTER_NEAREST);
+
+  // 7) Convert to 8-bit (0 or 255) for display or downstream use
+  latestMask_.convertTo(latestMask_, CV_8UC1, 255.0);
 }
 
 /**
@@ -289,6 +136,7 @@ void SegmentationWorker::onFrame(const cv::Mat &frame) {
  * @param background The new background image.
  */
 void SegmentationWorker::onBackgroundChange(const cv::Mat &background) {
+
   // Update the geometry to match the new background
   updateGeometry(background.cols * lowerRes_, background.rows * lowerRes_);
 }

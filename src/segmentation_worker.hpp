@@ -27,17 +27,6 @@
 #include <QDebug>
 #include <QObject>
 
-// Torch includes (with slots override to avoid conflicts with Qt)
-#if defined(slots)
-#pragma push_macro("slots")
-#undef slots
-#endif
-#include <torch/script.h>
-#include <torch/torch.h>
-#if defined(slots)
-#pragma pop_macro("slots")
-#endif
-
 // External includes
 #include <opencv2/opencv.hpp>
 
@@ -77,23 +66,6 @@ signals:
 private:
   // ================== Private Member Variable Declarations ==================
 
-  // Path to the segmentation model
-  std::string modelPath_;
-
-  // Internal state for segmentation
-  torch::jit::script::Module segmentModel_;
-
-  // The training device
-  torch::Device device_;
-
-  // pre-allocated Tensor for inference on the CPU and GPU
-  torch::Tensor inputCpuTensor_;
-  torch::Tensor inputTensor_;
-
-  // Dimensions for the model
-  int fastW_, fastH_;
-  int width_, height_;
-
   // The number of threads we have spare (excluding Qt ones)
   int nthreads_;
 
@@ -103,15 +75,7 @@ private:
   float lowerRes_;
 
   // The Matrix to hold the mask
-  cv::Mat smallFrame_;
-  cv::Mat rgbFrame_;
-  cv::Mat fastMask_;
   cv::Mat latestMask_;
-  cv::Mat prevPersonProb_;
-  cv::Mat smoothMask_;
-
-  // Smoothing factor in [0,1], defining weight between new and old mask
-  const float temporalSmooth_ = 0.6f;
 
   // Flag to indicate if we have a previous probability map
   bool havePrevProb_ = false;
@@ -122,45 +86,26 @@ private:
   // Drop bolbs in the mask smaller than this
   const int minBlobArea = 50;
 
+  // OpenCV background subtractor
+  cv::Ptr<cv::BackgroundSubtractorKNN> backSub_;
+
+  // width and height of the current background
+  int width_ = 0;
+  int height_ = 0;
+
+  // Temporal smoothing state
+  cv::Mat prevMaskFloat_; // CV_32F, same size as latestMask_, values in [0,1]
+  bool havePrevMask_ = false;  // whether prevMaskFloat_ is valid
+  const float temporalSmooth_; // blend factor α
+
   // ================== Member Function Prototypes ==================
 
   // Detect the person mask in the current frame using a segmentation model.
   void detectPersonMask(const cv::Mat &frame);
 
-  // Set up the segmentation model
-  void setupSegmentationModel(const std::string &modelPath);
-
   // Update the geometry when the background changes
   void updateGeometry(int width, int height);
+
+  // Re-create the subtractor (called onBackgroundChange)
+  void resetSubtractor();
 };
-
-/**
- * @brief Pick the device for PyTorch operations.
- *
- * This function checks for MPS and CUDA availability, and returns the
- * appropriate device.
- *
- * @returns torch::Device object representing the selected device.
- */
-static torch::Device pickDevice() {
-  torch::DeviceType dtype = torch::kCPU;
-
-#ifdef USE_MPS
-  if (torch::mps::is_available()) {
-    qInfo() << "[SegmentationWorker] Using MPS backend";
-    return torch::Device(torch::kMPS);
-  }
-#endif
-
-#ifdef USE_CUDA
-  if (torch::cuda::is_available()) {
-    qInfo() << "[SemgmentationWorker] Using CUDA backend";
-    return torch::Device(torch::kCUDA);
-  }
-#endif
-
-  else {
-    qInfo() << "[SemgmentationWorker] Using CPU backend";
-    return torch::Device(torch::kCPU);
-  }
-}

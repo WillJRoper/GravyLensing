@@ -150,22 +150,11 @@ void ViewPort::setLens(const cv::Mat &lens) {
   lensLabel_->setPixmap(QPixmap::fromImage(qi));
 }
 
-/**
- * @brief Set the mask image to be displayed in the viewport.
- *
- * This function sets the mask image to be displayed in the viewport
- * by converting it to a QImage and setting it as a pixmap.
- *
- * @param mask The cv::Mat object representing the mask image.
- */
 void ViewPort::setMask(const cv::Mat &mask) {
   // shallow‐copy header only
   mask_ = mask;
 
-  // If you want a red overlay you could convert here,
-  // but to keep it zero‐copy just display it directly:
   QImage qi = MatToQImage(mask_);
-
   maskLabel_->setPixmap(QPixmap::fromImage(qi));
 }
 
