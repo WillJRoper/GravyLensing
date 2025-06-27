@@ -22,6 +22,7 @@
  */
 
 // Standard includes
+#include <chrono>
 #include <iostream>
 
 // Local includes
@@ -87,31 +88,40 @@ void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
                            std::string(e.what()));
   }
 
+  // Allocate the device tensor (empty for now)
+  inputTensor_ = torch::empty(
+      {1, 3, fastH_, fastW_},
+      torch::TensorOptions().dtype(torch::kFloat32).device(device_));
+
 #ifdef USE_MPS
   // Allocate a CPU tensor for staging
   inputCpuTensor_ = torch::empty(
       {1, 3, fastH_, fastW_},
       torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
 #endif
-
-  // Allocate the device tensor (empty for now)
-  inputTensor_ = torch::empty(
-      {1, 3, fastH_, fastW_},
-      torch::TensorOptions().dtype(torch::kFloat32).device(device_));
 }
 
 void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
 
+  double startTime =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
   // Downsample the frame to the model size
+  double startDownsample =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   cv::resize(frame, smallFrame_, cv::Size(fastW_, fastH_), 0, 0,
              cv::INTER_LINEAR);
 
   // Convert from BGR to RGB for Torch
   cv::cvtColor(smallFrame_, rgbFrame_, cv::COLOR_BGR2RGB);
+  double endDownsample =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
 #ifdef USE_MPS
 
-  // COPY & NORMALIZE on CPU staging tensor
+  double startCopyLoop =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+  // COPY raw pixels into CPU staging tensor (no CPU normalization)
   float *cpu_ptr = inputCpuTensor_.data_ptr<float>();
   const int HW = fastH_ * fastW_;
 #pragma omp parallel for num_threads(nthreads_)
@@ -124,20 +134,43 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
       cpu_ptr[2 * HW + idx] = row[x][2] / 255.f;
     }
   }
-  // Normalize channels (torch ops on CPU)
-  auto tc = inputCpuTensor_;
-  tc[0][0].sub_(0.485f).div_(0.229f);
-  tc[0][1].sub_(0.456f).div_(0.224f);
-  tc[0][2].sub_(0.406f).div_(0.225f);
+  double endCopyLoop =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
+  double startCopy =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   // COPY CPU staging → GPU device tensor
   inputTensor_.copy_(inputCpuTensor_, /*non_blocking=*/true);
+  // **NEW**: wait for copy to actually complete
+  torch::mps::synchronize();
+  double endCopy =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
+  double startNormalize =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+  // NORMALIZE in-place on MPS
+  {
+    torch::NoGradGuard no_grad;
+    inputTensor_[0][0].sub_(0.485f).div_(0.229f);
+    inputTensor_[0][1].sub_(0.456f).div_(0.224f);
+    inputTensor_[0][2].sub_(0.406f).div_(0.225f);
+  }
+  double endNormalize =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
   // RUN inference on GPU
+  double startInference =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   static const auto forwardMethod = segmentModel_.get_method("forward");
   auto out_iv = forwardMethod({inputTensor_});
+  // **NEW**: wait for inference to actually complete
+  torch::mps::synchronize();
+  double endInference =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
   // Unwrap IValue → logits tensor:
+  double startUnwrap =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   torch::Tensor logits;
   if (out_iv.isTensor())
     logits = out_iv.toTensor();
@@ -146,15 +179,19 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
   else if (out_iv.isGenericDict())
     logits = out_iv.toGenericDict().at("out").toTensor();
   else {
-    std::cerr << "[SemgmentationWorker] Bad IValue\n";
+    std::cerr << "[SegmentationWorker] Bad IValue\n";
     return;
   }
+  double endUnwrap =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
+  double startCopyBack =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   // Bring logits back to CPU, pick class
   torch::Tensor probs = logits.squeeze(0).softmax(0);
-
-  // Extract the “person” channel (say label 15) and transfer to CPU
   torch::Tensor personProb_t = probs[kPersonClass_].to(torch::kCPU);
+  double endCopyBack =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
 #else
 
@@ -191,36 +228,47 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
 
   // Convert logits → class map
   torch::Tensor probs = logits.squeeze(0).softmax(0);
-
-  // Extract the “person” channel (say label 15)
   torch::Tensor personProb_t = probs[dPersonClass_];
 
 #endif
 
+  double startConvert =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
   // Convert to an OpenCV Mat (CV_32F)
   cv::Mat newPersonProb(fastH_, fastW_, CV_32F,
                         (void *)personProb_t.data_ptr<float>());
+  double endConvert =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
-  // Initialize or EMA-blend
+  double startSmooth =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   if (!havePrevProb_) {
     prevPersonProb_ = newPersonProb.clone();
     havePrevProb_ = true;
   } else {
-    // prev = α*new + (1–α)*prev
     cv::addWeighted(newPersonProb, temporalSmooth_, prevPersonProb_,
                     1.0f - temporalSmooth_, 0.0, prevPersonProb_);
   }
+  double endSmooth =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
-  // Threshold the smoothed probability map into a mask
+  double startThreshold =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   cv::threshold(prevPersonProb_, smoothMask_, 0.5, 255, cv::THRESH_BINARY);
-
   smoothMask_.convertTo(fastMask_, CV_8U);
+  double endThreshold =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
-  // Close small holes
+  double startMorph =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   cv::morphologyEx(fastMask_, fastMask_, cv::MORPH_CLOSE,
                    cv::getStructuringElement(cv::MORPH_ELLIPSE, {5, 5}));
+  double endMorph =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
-  // Drop tiny components
+  double startContours =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   std::vector<std::vector<cv::Point>> contours;
   cv::findContours(fastMask_, contours, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
   for (auto &c : contours) {
@@ -228,10 +276,80 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
       cv::drawContours(fastMask_, std::vector<std::vector<cv::Point>>{c}, 0, 0,
                        -1);
   }
+  double endContours =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
 
-  // Then upsample + post-process as before
+  double startPostProcess =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
   cv::resize(fastMask_, latestMask_, latestMask_.size(), 0, 0,
              cv::INTER_NEAREST);
+  double endPostProcess =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
+  double endTime =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
+  // Compute timings
+  double totalTime = endTime - startTime;
+  double downsampleTime = endDownsample - startDownsample;
+  double copyLoopTime = endCopyLoop - startCopyLoop;
+  double copyTime = endCopy - startCopy;
+  double normalizeTime = endNormalize - startNormalize;
+  double inferenceTime = endInference - startInference;
+  double unwrapTime = endUnwrap - startUnwrap;
+  double convertTime = endConvert - startConvert;
+  double smoothTime = endSmooth - startSmooth;
+  double thresholdTime = endThreshold - startThreshold;
+  double morphTime = endMorph - startMorph;
+  double contoursTime = endContours - startContours;
+  double postProcessTime = endPostProcess - startPostProcess;
+
+  double percentDownsample = (downsampleTime / totalTime) * 100.0;
+  double percentCopyLoop = (copyLoopTime / totalTime) * 100.0;
+  double percentCopy = (copyTime / totalTime) * 100.0;
+  double percentNormalize = (normalizeTime / totalTime) * 100.0;
+  double percentInference = (inferenceTime / totalTime) * 100.0;
+  double percentUnwrap = (unwrapTime / totalTime) * 100.0;
+  double percentConvert = (convertTime / totalTime) * 100.0;
+  double percentSmooth = (smoothTime / totalTime) * 100.0;
+  double percentThreshold = (thresholdTime / totalTime) * 100.0;
+  double percentMorph = (morphTime / totalTime) * 100.0;
+  double percentContours = (contoursTime / totalTime) * 100.0;
+  double percentPostProcess = (postProcessTime / totalTime) * 100.0;
+
+  double missingTime =
+      totalTime - (downsampleTime + copyLoopTime + copyTime + normalizeTime +
+                   inferenceTime + unwrapTime + convertTime + smoothTime +
+                   thresholdTime + morphTime + contoursTime + postProcessTime);
+  double percentMissing = (missingTime / totalTime) * 100.0;
+
+  // Report the timings
+  std::cout << "[SegmentationWorker] Frame processed in " << totalTime / 1e6
+            << " ms ("
+            << "downsample: " << downsampleTime / 1e6 << " ms, "
+            << "copy loop: " << copyLoopTime / 1e6 << " ms, "
+            << "copy: " << copyTime / 1e6 << " ms, "
+            << "normalize: " << normalizeTime / 1e6 << " ms, "
+            << "inference: " << inferenceTime / 1e6 << " ms, "
+            << "unwrap: " << unwrapTime / 1e6 << " ms, "
+            << "convert: " << convertTime / 1e6 << " ms, "
+            << "smooth: " << smoothTime / 1e6 << " ms, "
+            << "threshold: " << thresholdTime / 1e6 << " ms, "
+            << "morph: " << morphTime / 1e6 << " ms, "
+            << "contours: " << contoursTime / 1e6 << " ms, "
+            << "post-process: " << postProcessTime / 1e6
+            << " ms) [downsample: " << percentDownsample
+            << "%, copy loop: " << percentCopyLoop << "%, copy: " << percentCopy
+            << "%, normalize: " << percentNormalize
+            << "%, inference: " << percentInference
+            << "%, unwrap: " << percentUnwrap
+            << "%, convert: " << percentConvert
+            << "%, smooth: " << percentSmooth
+            << "%, threshold: " << percentThreshold
+            << "%, morph: " << percentMorph
+            << "%, contours: " << percentContours
+            << "%, post-process: " << percentPostProcess << " %] "
+            << "[missing: " << percentMissing << "%]\n";
 }
 
 /**
