@@ -406,9 +406,6 @@ void LensingWorker::onBackgroundChange(const cv::Mat &background) {
  */
 void LensingWorker::onMask(const cv::Mat &mask) {
 
-  double startTime =
-      std::chrono::high_resolution_clock::now().time_since_epoch().count();
-
   // If we don't have a background, theres nothing to do
   if (currentBackground_.empty()) {
     return;
@@ -433,12 +430,4 @@ void LensingWorker::onMask(const cv::Mat &mask) {
     emit lensingError("Lensing error: " + std::string(e.what()));
     return;
   }
-
-  double endTime =
-      std::chrono::high_resolution_clock::now().time_since_epoch().count();
-
-  // Compute the total time taken
-  double totalTime = endTime - startTime;
-  std::cout << "[LensingWorker] Lensing effect applied in " << totalTime / 1e6
-            << " ms\n";
 }
