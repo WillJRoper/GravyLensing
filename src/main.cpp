@@ -50,6 +50,19 @@ const std::string bgDir = "backgrounds/";
 Q_DECLARE_METATYPE(cv::Mat)
 
 /**
+ * @brief Report any errors that occur during the application execution.
+ *
+ * This function is used to report errors that occur during the execution
+ * of the GravyLensing application. It can be used to log errors or display
+ * them to the user.
+ *
+ * @param err The error message to report.
+ */
+void reportError(const QString &err) {
+  std::cerr << "Error: " << err.toStdString() << std::endl;
+}
+
+/**
  * @brief Connected all the signals and slots.
  *
  * This function connects the signals and slots between the camera feed,
@@ -108,6 +121,12 @@ void connectSignals(CameraFeed *camFeed, SegmentationWorker *segWorker,
     QObject::connect(backgrounds, &Backgrounds::backgroundChanged, vp,
                      &ViewPort::setBackground, Qt::QueuedConnection);
   }
+
+  // Link up error reporting
+  QObject::connect(camFeed, &CameraFeed::captureError, reportError);
+  QObject::connect(segWorker, &SegmentationWorker::segmentationError,
+                   reportError);
+  QObject::connect(lensWorker, &LensingWorker::lensingError, reportError);
 }
 
 /*
