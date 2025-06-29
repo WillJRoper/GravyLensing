@@ -22,6 +22,7 @@
  */
 
 // Standard includes
+#include <chrono>
 #include <iostream>
 
 // Local includes
@@ -87,17 +88,17 @@ void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
                            std::string(e.what()));
   }
 
+  // Allocate the device tensor (empty for now)
+  inputTensor_ = torch::empty(
+      {1, 3, fastH_, fastW_},
+      torch::TensorOptions().dtype(torch::kFloat32).device(device_));
+
 #ifdef USE_MPS
   // Allocate a CPU tensor for staging
   inputCpuTensor_ = torch::empty(
       {1, 3, fastH_, fastW_},
       torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
 #endif
-
-  // Allocate the device tensor (empty for now)
-  inputTensor_ = torch::empty(
-      {1, 3, fastH_, fastW_},
-      torch::TensorOptions().dtype(torch::kFloat32).device(device_));
 }
 
 void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
@@ -111,7 +112,7 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
 
 #ifdef USE_MPS
 
-  // COPY & NORMALIZE on CPU staging tensor
+  // COPY raw pixels into CPU staging tensor (no CPU normalization)
   float *cpu_ptr = inputCpuTensor_.data_ptr<float>();
   const int HW = fastH_ * fastW_;
 #pragma omp parallel for num_threads(nthreads_)
@@ -124,14 +125,17 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
       cpu_ptr[2 * HW + idx] = row[x][2] / 255.f;
     }
   }
-  // Normalize channels (torch ops on CPU)
-  auto tc = inputCpuTensor_;
-  tc[0][0].sub_(0.485f).div_(0.229f);
-  tc[0][1].sub_(0.456f).div_(0.224f);
-  tc[0][2].sub_(0.406f).div_(0.225f);
 
   // COPY CPU staging → GPU device tensor
   inputTensor_.copy_(inputCpuTensor_, /*non_blocking=*/true);
+
+  // NORMALIZE in-place on MPS
+  {
+    torch::NoGradGuard no_grad;
+    inputTensor_[0][0].sub_(0.485f).div_(0.229f);
+    inputTensor_[0][1].sub_(0.456f).div_(0.224f);
+    inputTensor_[0][2].sub_(0.406f).div_(0.225f);
+  }
 
   // RUN inference on GPU
   static const auto forwardMethod = segmentModel_.get_method("forward");
@@ -146,14 +150,12 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
   else if (out_iv.isGenericDict())
     logits = out_iv.toGenericDict().at("out").toTensor();
   else {
-    std::cerr << "[SemgmentationWorker] Bad IValue\n";
+    std::cerr << "[SegmentationWorker] Bad IValue\n";
     return;
   }
 
   // Bring logits back to CPU, pick class
   torch::Tensor probs = logits.squeeze(0).softmax(0);
-
-  // Extract the “person” channel (say label 15) and transfer to CPU
   torch::Tensor personProb_t = probs[kPersonClass_].to(torch::kCPU);
 
 #else
@@ -191,8 +193,6 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
 
   // Convert logits → class map
   torch::Tensor probs = logits.squeeze(0).softmax(0);
-
-  // Extract the “person” channel (say label 15)
   torch::Tensor personProb_t = probs[dPersonClass_];
 
 #endif
@@ -201,26 +201,20 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
   cv::Mat newPersonProb(fastH_, fastW_, CV_32F,
                         (void *)personProb_t.data_ptr<float>());
 
-  // Initialize or EMA-blend
   if (!havePrevProb_) {
     prevPersonProb_ = newPersonProb.clone();
     havePrevProb_ = true;
   } else {
-    // prev = α*new + (1–α)*prev
     cv::addWeighted(newPersonProb, temporalSmooth_, prevPersonProb_,
                     1.0f - temporalSmooth_, 0.0, prevPersonProb_);
   }
 
-  // Threshold the smoothed probability map into a mask
   cv::threshold(prevPersonProb_, smoothMask_, 0.5, 255, cv::THRESH_BINARY);
-
   smoothMask_.convertTo(fastMask_, CV_8U);
 
-  // Close small holes
   cv::morphologyEx(fastMask_, fastMask_, cv::MORPH_CLOSE,
                    cv::getStructuringElement(cv::MORPH_ELLIPSE, {5, 5}));
 
-  // Drop tiny components
   std::vector<std::vector<cv::Point>> contours;
   cv::findContours(fastMask_, contours, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
   for (auto &c : contours) {
@@ -229,7 +223,6 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
                        -1);
   }
 
-  // Then upsample + post-process as before
   cv::resize(fastMask_, latestMask_, latestMask_.size(), 0, 0,
              cv::INTER_NEAREST);
 }
