@@ -54,6 +54,9 @@ public:
                      int nthreads = 1, float temporalSmooth = 0.6f,
                      float lowerRes = 1.0f);
 
+  // Check loaded model
+  bool isModelLoaded() const { return modelLoaded_; }
+
   // ===================== Qt Slots ==================
 
 public Q_SLOTS:
@@ -121,6 +124,9 @@ private:
 
   // Drop bolbs in the mask smaller than this
   const int minBlobArea = 50;
+
+  // Did we load successfully?
+  bool modelLoaded_ = false;
 
   // ================== Member Function Prototypes ==================
 

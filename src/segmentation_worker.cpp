@@ -66,6 +66,13 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
   // Set up the segmentation model
   setupSegmentationModel(modelPath);
 
+  // Exit if the loading failed
+  if (!modelLoaded_) {
+    emit segmentationError("Failed to load the segmentation model from " +
+                           modelPath);
+    return;
+  }
+
   std::cout << "[SegmentationWorker] Loaded model from " << modelPath_ << "\n";
 }
 
@@ -83,9 +90,10 @@ void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
     segmentModel_ = torch::jit::load(modelPath_, device_);
     segmentModel_.to(device_);
     segmentModel_.eval();
+    modelLoaded_ = true;
   } catch (const c10::Error &e) {
-    emit segmentationError("Failed to load the segmentation model: " +
-                           std::string(e.what()));
+    modelLoaded_ = false;
+    return;
   }
 
   // Allocate the device tensor (empty for now)

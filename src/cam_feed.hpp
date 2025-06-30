@@ -21,6 +21,9 @@
 
 #pragma once
 
+// Standard includes
+#include <string>
+
 // Qt includes
 #include <QObject>
 
@@ -45,12 +48,15 @@ public:
   /// Start continuous capture in this thread
   Q_INVOKABLE void startCaptureLoop();
 
+  // Is the camera open?
+  bool isOpen() const { return isOpen_; }
+
 signals:
   /// Emitted as soon as a new frame is ready
   void frameCaptured(const cv::Mat &frame);
 
   /// Emitted if there's an error opening or reading the camera
-  void captureError(const QString &msg);
+  void captureError(const std::string &error);
 
 private:
   bool initCamera(); ///< Called by ctor to open cap_
@@ -70,4 +76,7 @@ private:
 
   // Are we doing ROI selection?
   bool doingROI_ = false;
+
+  // Did we open ok?
+  bool isOpen_ = false;
 };

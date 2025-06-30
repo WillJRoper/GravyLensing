@@ -23,10 +23,12 @@
 // Standard includes
 #include <chrono>
 #include <iostream>
+#include <string>
 
 // Qt includes
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QMetaType>
 #include <QThread>
 #include <QTimer>
@@ -48,6 +50,19 @@ const std::string bgDir = "backgrounds/";
 
 // Register cv::Mat as a Qt metatype
 Q_DECLARE_METATYPE(cv::Mat)
+
+/**
+ * @brief Report any errors that occur during the application execution.
+ *
+ * This function is used to report errors that occur during the execution
+ * of the GravyLensing application. It can be used to log errors or display
+ * them to the user.
+ *
+ * @param err The error message to report.
+ */
+void reportError(const std::string &err) {
+  std::cerr << "Error: " << err << std::endl;
+}
 
 /**
  * @brief Connected all the signals and slots.
@@ -108,6 +123,12 @@ void connectSignals(CameraFeed *camFeed, SegmentationWorker *segWorker,
     QObject::connect(backgrounds, &Backgrounds::backgroundChanged, vp,
                      &ViewPort::setBackground, Qt::QueuedConnection);
   }
+
+  // Link up error reporting
+  QObject::connect(camFeed, &CameraFeed::captureError, reportError);
+  QObject::connect(segWorker, &SegmentationWorker::segmentationError,
+                   reportError);
+  QObject::connect(lensWorker, &LensingWorker::lensingError, reportError);
 }
 
 /*
@@ -163,13 +184,24 @@ int main(int argc, char **argv) {
   camFeed->moveToThread(camThread);
   QObject::connect(camThread, &QThread::started, camFeed,
                    &CameraFeed::startCaptureLoop);
-  QObject::connect(camFeed, &CameraFeed::captureError, vp,
-                   [&](const QString &err) { qWarning() << err; });
   camThread->start();
+
+  // If we failed to open the camera, we can't continue
+  if (!camFeed->isOpen()) {
+    return -1;
+  }
 
   // Segmentation
   auto segWorker = new SegmentationWorker(modelPath, modelSize, nthreads,
                                           temporalSmooth, lowerRes);
+
+  // If we failed to load the model, we can't continue
+  if (!segWorker->isModelLoaded()) {
+    reportError("Failed to load segmentation model from " + modelPath);
+    return -1;
+  }
+
+  // Move the segmentation worker to its own thread
   QThread *segThread = new QThread;
   segWorker->moveToThread(segThread);
   segThread->start();

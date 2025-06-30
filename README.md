@@ -94,9 +94,9 @@ The executable `gravy_lens` will then be placed in the project root.
 
 ## Generating Segementation models
 
-Before running GravyLensing you will need some segmentation models to detect people in the frame. We provide a unified Python script, `get_models.py` (in the `models/` directory), to generate TorchScript or ONNX artifacts for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
+Before running GravyLensing you will need some segmentation models to detect people in the frame. Included in the `models/` directory is a performance optimised model using LRASPP model that can be used out the box.
 
-NOTE: ONNX is not yet supported in the C++ app but will be.
+However, we also provide a unified Python script, `get_models.py` (in the `models/` directory), to generate TorchScript for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
 
 **Install prerequisites**
 
@@ -212,9 +212,11 @@ Options:
                                                      the full frame is used.
 ```
 
-- Place background images (up to 10) in the `backgrounds/` directory.
-- Use 0-9 keys to cycle through backgrounds.
-- Press `ESC` or close the window to exit.
+For example, an efficient set up for running on a laptop with the output on the screen (requiring flipping) would be:
+
+```bash
+./gravy_lens --nthreads 12 --modelSize 512 --mp models/lraspp_torchscript-traced_float32_512_512.pt  --softening 50 --strength 4 --lowerRes 0.5 --secondsPerBackground 3 --flip --distortInside
+```
 
 ## Python Example
 

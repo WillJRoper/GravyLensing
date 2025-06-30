@@ -120,7 +120,29 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
 
   // Initialize the camera feed and ensure it is opened successfully
   if (!initCamera()) {
-    emit captureError("Failed to open camera " + QString::number(deviceIndex_));
+    emit captureError("Failed to open camera device " +
+                      std::to_string(deviceIndex_));
+    isOpen_ = false;
+    return;
+  }
+
+  // Ensure we have opened a valid camera with a valid index
+  if (!cap_.isOpened()) {
+    emit captureError("Failed to open camera device " +
+                      std::to_string(deviceIndex_));
+    isOpen_ = false;
+    return;
+  }
+
+  // We are now open
+  isOpen_ = true;
+
+  // Check we are getting frames at all
+  cv::Mat testFrame;
+  if (!cap_.read(testFrame) || testFrame.empty()) {
+    emit captureError("Failed to read initial frame from camera device " +
+                      std::to_string(deviceIndex_));
+    return;
   }
 
   std::cout << "[CameraFeed] Camera " << deviceIndex_
