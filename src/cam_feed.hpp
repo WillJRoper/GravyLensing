@@ -21,6 +21,9 @@
 
 #pragma once
 
+// Standard includes
+#include <string>
+
 // Qt includes
 #include <QObject>
 
@@ -50,7 +53,7 @@ signals:
   void frameCaptured(const cv::Mat &frame);
 
   /// Emitted if there's an error opening or reading the camera
-  void captureError(const QString &msg);
+  void captureError(const std::string &error);
 
 private:
   bool initCamera(); ///< Called by ctor to open cap_

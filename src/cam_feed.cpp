@@ -120,7 +120,8 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
 
   // Initialize the camera feed and ensure it is opened successfully
   if (!initCamera()) {
-    emit captureError("Failed to open camera " + QString::number(deviceIndex_));
+    emit captureError("Failed to open camera device " +
+                      std::to_string(deviceIndex_));
   }
 
   std::cout << "[CameraFeed] Camera " << deviceIndex_

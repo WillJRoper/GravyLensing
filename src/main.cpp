@@ -23,10 +23,12 @@
 // Standard includes
 #include <chrono>
 #include <iostream>
+#include <string>
 
 // Qt includes
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QMetaType>
 #include <QThread>
 #include <QTimer>
@@ -58,8 +60,8 @@ Q_DECLARE_METATYPE(cv::Mat)
  *
  * @param err The error message to report.
  */
-void reportError(const QString &err) {
-  std::cerr << "Error: " << err.toStdString() << std::endl;
+void reportError(const std::string &err) {
+  std::cerr << "Error: " << err << std::endl;
 }
 
 /**
@@ -182,8 +184,6 @@ int main(int argc, char **argv) {
   camFeed->moveToThread(camThread);
   QObject::connect(camThread, &QThread::started, camFeed,
                    &CameraFeed::startCaptureLoop);
-  QObject::connect(camFeed, &CameraFeed::captureError, vp,
-                   [&](const QString &err) { qWarning() << err; });
   camThread->start();
 
   // Segmentation
