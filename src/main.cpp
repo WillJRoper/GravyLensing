@@ -186,9 +186,22 @@ int main(int argc, char **argv) {
                    &CameraFeed::startCaptureLoop);
   camThread->start();
 
+  // If we failed to open the camera, we can't continue
+  if (!camFeed->isOpen()) {
+    return -1;
+  }
+
   // Segmentation
   auto segWorker = new SegmentationWorker(modelPath, modelSize, nthreads,
                                           temporalSmooth, lowerRes);
+
+  // If we failed to load the model, we can't continue
+  if (!segWorker->isModelLoaded()) {
+    reportError("Failed to load segmentation model from " + modelPath);
+    return -1;
+  }
+
+  // Move the segmentation worker to its own thread
   QThread *segThread = new QThread;
   segWorker->moveToThread(segThread);
   segThread->start();

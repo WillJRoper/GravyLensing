@@ -48,6 +48,9 @@ public:
   /// Start continuous capture in this thread
   Q_INVOKABLE void startCaptureLoop();
 
+  // Is the camera open?
+  bool isOpen() const { return isOpen_; }
+
 signals:
   /// Emitted as soon as a new frame is ready
   void frameCaptured(const cv::Mat &frame);
@@ -73,4 +76,7 @@ private:
 
   // Are we doing ROI selection?
   bool doingROI_ = false;
+
+  // Did we open ok?
+  bool isOpen_ = false;
 };
