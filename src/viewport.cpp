@@ -82,8 +82,13 @@ ViewPort::ViewPort(QWidget *parent)
     lbl->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
   }
 
-  // Make the main window the size of the screen
-  showMaximized();
+  // Instead of full-screen, start at a nice 4∶3 size
+  // (e.g. 80% of screen width)
+  auto geom = QGuiApplication::primaryScreen()->availableGeometry();
+  int w = int(geom.width() * 0.8);
+  int h = heightForWidth(w);
+  resize(w, h);
+  setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 }
 
 /**
@@ -294,4 +299,17 @@ ViewPort *initViewport(Backgrounds *backgrounds, bool debugGrid) {
   vp->show();
 
   return vp;
+}
+
+bool ViewPort::hasHeightForWidth() const { return true; }
+
+int ViewPort::heightForWidth(int w) const {
+  // enforce h = ¾ w
+  return w * 3 / 4;
+}
+
+QSize ViewPort::sizeHint() const {
+  // match our initial resize; could also be hard-coded (800×600)
+  int w = width();
+  return QSize(w, heightForWidth(w));
 }

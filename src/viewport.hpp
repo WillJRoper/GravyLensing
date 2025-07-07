@@ -64,6 +64,11 @@ public:
     backgrounds_ = backgrounds;
   }
 
+  // Let Qt know our height is a function of our width
+  bool hasHeightForWidth() const override;
+  int heightForWidth(int width) const override;
+  QSize sizeHint() const override;
+
 protected:
   // catch key presses
   void keyPressEvent(QKeyEvent *event) override;
