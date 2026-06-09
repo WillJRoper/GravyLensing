@@ -49,6 +49,7 @@ public:
   bool distortInside;
   bool flip;
   bool selectROI;
+  std::string maskMode;
   std::string modelPath;
 
   // Constructor is also the parser
@@ -156,6 +157,13 @@ public:
         "lensing effect. If not set, the full frame is used.");
     parser.addOption(selectROIOption);
 
+    QCommandLineOption maskModeOption(
+        QStringList() << "maskMode",
+        "Mask source to use: 'person' for Torch segmentation or 'color' for "
+        "adaptive color tracking (default=person).",
+        "maskMode", "person");
+    parser.addOption(maskModeOption);
+
     parser.process(app);
 
     // Validate required --nthreads
@@ -232,6 +240,11 @@ public:
     opts.distortInside = parser.isSet(distortInsideOption);
     opts.flip = parser.isSet(flipOption);
     opts.selectROI = parser.isSet(selectROIOption);
+    opts.maskMode = parser.value(maskModeOption).toStdString();
+    if (opts.maskMode != "person" && opts.maskMode != "color") {
+      std::cerr << "Error: --maskMode must be either 'person' or 'color'.\n";
+      std::exit(-1);
+    }
 
     return opts;
   }

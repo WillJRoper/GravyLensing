@@ -22,6 +22,7 @@
 #pragma once
 
 // Standard includes
+#include <atomic>
 #include <string>
 
 // Qt includes
@@ -47,6 +48,12 @@ public:
 
   /// Start continuous capture in this thread
   Q_INVOKABLE void startCaptureLoop();
+
+  /// Request that the capture loop exits.
+  void stopCaptureLoop();
+
+  // Capture a setup frame using the same transforms as runtime output.
+  cv::Mat captureSetupFrame();
 
   // Is the camera open?
   bool isOpen() const { return isOpen_; }
@@ -79,4 +86,7 @@ private:
 
   // Did we open ok?
   bool isOpen_ = false;
+
+  // Cooperative stop flag for the capture loop.
+  std::atomic<bool> stopRequested_{false};
 };

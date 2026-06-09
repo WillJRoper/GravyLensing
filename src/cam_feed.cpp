@@ -217,12 +217,13 @@ bool CameraFeed::initCamera() {
  */
 void CameraFeed::startCaptureLoop() {
 
+  stopRequested_.store(false);
+
   // Define a local reusable header for the frame
   cv::Mat frame;
 
   // Loop until the end of time (or until the thread is stopped)
-  while (QThread::currentThread()->isRunning() &&
-         !QCoreApplication::closingDown()) {
+  while (!stopRequested_.load() && !QCoreApplication::closingDown()) {
 
     // Capture a frame from the camera
     if (!cap_.grab() || !cap_.retrieve(frame)) {
@@ -244,4 +245,24 @@ void CameraFeed::startCaptureLoop() {
       emit frameCaptured(frame);
     }
   }
+}
+
+void CameraFeed::stopCaptureLoop() { stopRequested_.store(true); }
+
+cv::Mat CameraFeed::captureSetupFrame() {
+  cv::Mat frame;
+  if (!cap_.grab() || !cap_.retrieve(frame) || frame.empty()) {
+    emit captureError("Failed to capture setup frame");
+    return cv::Mat();
+  }
+
+  if (flip_) {
+    cv::flip(frame, frame, 1);
+  }
+
+  if (doingROI_) {
+    return applyROIMaskAndCrop(frame, roiMask_, roiRect_);
+  }
+
+  return frame;
 }

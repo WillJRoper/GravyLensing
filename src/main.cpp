@@ -29,6 +29,8 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFileInfo>
+#include <QLibraryInfo>
 #include <QMetaType>
 #include <QThread>
 #include <QTimer>
@@ -41,6 +43,7 @@
 #include "backgrounds.hpp"
 #include "cam_feed.hpp"
 #include "cmd_parser.hpp"
+#include "color_mask.hpp"
 #include "lensing_worker.hpp"
 #include "segmentation_worker.hpp"
 #include "viewport.hpp"
@@ -77,9 +80,32 @@ void reportError(const std::string &err) {
  * @param backgrounds The backgrounds object.
  * @param debugGrid Whether to enable the debug grid.
  */
+void connectCommonSignals(CameraFeed *camFeed, LensingWorker *lensWorker,
+                          ViewPort *vp, Backgrounds *backgrounds,
+                          bool debugGrid) {
+
+  QObject::connect(lensWorker, &LensingWorker::lensedReady, vp,
+                   &ViewPort::setLens, Qt::QueuedConnection);
+
+  QObject::connect(backgrounds, &Backgrounds::backgroundChanged, lensWorker,
+                   &LensingWorker::onBackgroundChange, Qt::QueuedConnection);
+
+  if (debugGrid) {
+    QObject::connect(camFeed, &CameraFeed::frameCaptured, vp,
+                     &ViewPort::setImage, Qt::QueuedConnection);
+    QObject::connect(backgrounds, &Backgrounds::backgroundChanged, vp,
+                     &ViewPort::setBackground, Qt::QueuedConnection);
+  }
+
+  QObject::connect(camFeed, &CameraFeed::captureError, reportError);
+  QObject::connect(lensWorker, &LensingWorker::lensingError, reportError);
+}
+
 void connectSignals(CameraFeed *camFeed, SegmentationWorker *segWorker,
                     LensingWorker *lensWorker, ViewPort *vp,
                     Backgrounds *backgrounds, bool debugGrid) {
+
+  connectCommonSignals(camFeed, lensWorker, vp, backgrounds, debugGrid);
 
   // First the main steps of the calculation:
   //      Frame -> Segmentation - > Lensing - > ViewPort
@@ -92,43 +118,41 @@ void connectSignals(CameraFeed *camFeed, SegmentationWorker *segWorker,
   QObject::connect(segWorker, &SegmentationWorker::maskReady, lensWorker,
                    &LensingWorker::onMask, Qt::QueuedConnection);
 
-  // ViewPort ← Lensing (New lensed image)
-  QObject::connect(lensWorker, &LensingWorker::lensedReady, vp,
-                   &ViewPort::setLens, Qt::QueuedConnection);
-
-  // Next connect up and the things that run when the background changes:
-
-  // Backgrounds → Segmentation (New background)
   QObject::connect(backgrounds, &Backgrounds::backgroundChanged, segWorker,
                    &SegmentationWorker::onBackgroundChange,
                    Qt::QueuedConnection);
 
-  // Background switches from UI → LensingWorker
-  QObject::connect(backgrounds, &Backgrounds::backgroundChanged, lensWorker,
-                   &LensingWorker::onBackgroundChange, Qt::QueuedConnection);
-
   // Handle the debug grid specific connections for extra displays in the
   // viewport
   if (debugGrid) {
-
-    // ViewPort ← Camera (raw display)
-    QObject::connect(camFeed, &CameraFeed::frameCaptured, vp,
-                     &ViewPort::setImage, Qt::QueuedConnection);
-
-    // ViewPort ← Segmentation (mask display, if in debug)
     QObject::connect(segWorker, &SegmentationWorker::maskReady, vp,
                      &ViewPort::setMask, Qt::QueuedConnection);
-
-    // Also update the UI display when background changes
-    QObject::connect(backgrounds, &Backgrounds::backgroundChanged, vp,
-                     &ViewPort::setBackground, Qt::QueuedConnection);
   }
 
-  // Link up error reporting
-  QObject::connect(camFeed, &CameraFeed::captureError, reportError);
   QObject::connect(segWorker, &SegmentationWorker::segmentationError,
                    reportError);
-  QObject::connect(lensWorker, &LensingWorker::lensingError, reportError);
+}
+
+void connectSignals(CameraFeed *camFeed, ColorMaskWorker *colorWorker,
+                    LensingWorker *lensWorker, ViewPort *vp,
+                    Backgrounds *backgrounds, bool debugGrid) {
+
+  connectCommonSignals(camFeed, lensWorker, vp, backgrounds, debugGrid);
+
+  QObject::connect(camFeed, &CameraFeed::frameCaptured, colorWorker,
+                   &ColorMaskWorker::onFrame, Qt::QueuedConnection);
+  QObject::connect(colorWorker, &ColorMaskWorker::maskReady, lensWorker,
+                   &LensingWorker::onMask, Qt::QueuedConnection);
+  QObject::connect(backgrounds, &Backgrounds::backgroundChanged, colorWorker,
+                   &ColorMaskWorker::onBackgroundChange,
+                   Qt::QueuedConnection);
+
+  if (debugGrid) {
+    QObject::connect(colorWorker, &ColorMaskWorker::maskReady, vp,
+                     &ViewPort::setMask, Qt::QueuedConnection);
+  }
+
+  QObject::connect(colorWorker, &ColorMaskWorker::maskError, reportError);
 }
 
 /*
@@ -143,6 +167,29 @@ void connectSignals(CameraFeed *camFeed, SegmentationWorker *segWorker,
  * @return int The exit code of the application.
  */
 int main(int argc, char **argv) {
+
+  const QStringList pluginRoots = {
+      QLibraryInfo::path(QLibraryInfo::PluginsPath),
+      "/opt/homebrew/opt/qtbase/share/qt/plugins",
+      "/opt/homebrew/share/qt/plugins",
+  };
+
+  for (const QString &pluginPath : pluginRoots) {
+    if (pluginPath.isEmpty()) {
+      continue;
+    }
+
+    const QString platformPath = pluginPath + "/platforms";
+    const QString cocoaPlugin = platformPath + "/libqcocoa.dylib";
+    if (!QFileInfo::exists(cocoaPlugin)) {
+      continue;
+    }
+
+    qputenv("QT_PLUGIN_PATH", pluginPath.toUtf8());
+    qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", platformPath.toUtf8());
+    break;
+  }
+
   QApplication app(argc, argv);
 
   // Parse options
@@ -160,6 +207,7 @@ int main(int argc, char **argv) {
   bool distortInside = opts.distortInside;
   bool flip = opts.flip;
   bool selectROI = opts.selectROI;
+  const std::string maskMode = opts.maskMode;
   const std::string modelPath = opts.modelPath;
 
   // Correct the number of threads to account for those that have
@@ -180,31 +228,39 @@ int main(int argc, char **argv) {
 
   // Camera feed
   CameraFeed *camFeed = new CameraFeed(deviceIndex, flip, selectROI);
-  QThread *camThread = new QThread;
-  camFeed->moveToThread(camThread);
-  QObject::connect(camThread, &QThread::started, camFeed,
-                   &CameraFeed::startCaptureLoop);
-  camThread->start();
 
   // If we failed to open the camera, we can't continue
   if (!camFeed->isOpen()) {
     return -1;
   }
 
-  // Segmentation
-  auto segWorker = new SegmentationWorker(modelPath, modelSize, nthreads,
-                                          temporalSmooth, lowerRes);
+  SegmentationWorker *segWorker = nullptr;
+  ColorMaskWorker *colorWorker = nullptr;
+  QThread *maskThread = new QThread;
 
-  // If we failed to load the model, we can't continue
-  if (!segWorker->isModelLoaded()) {
-    reportError("Failed to load segmentation model from " + modelPath);
-    return -1;
+  if (maskMode == "person") {
+    segWorker = new SegmentationWorker(modelPath, modelSize, nthreads,
+                                       temporalSmooth, lowerRes);
+    if (!segWorker->isModelLoaded()) {
+      reportError("Failed to load segmentation model from " + modelPath);
+      return -1;
+    }
+    segWorker->moveToThread(maskThread);
+  } else {
+    const cv::Mat initialFrame = camFeed->captureSetupFrame();
+    if (initialFrame.empty()) {
+      reportError("Failed to capture setup frame for color selection");
+      return -1;
+    }
+    colorWorker = new ColorMaskWorker(initialFrame, lowerRes);
+    if (!colorWorker->isReady()) {
+      reportError(colorWorker->lastError());
+      return -1;
+    }
+    colorWorker->moveToThread(maskThread);
   }
 
-  // Move the segmentation worker to its own thread
-  QThread *segThread = new QThread;
-  segWorker->moveToThread(segThread);
-  segThread->start();
+  maskThread->start();
 
   // Lensing
   auto lensWorker = new LensingWorker(strength, softening, padFactor, nthreads,
@@ -213,8 +269,20 @@ int main(int argc, char **argv) {
   lensWorker->moveToThread(lensThread);
   lensThread->start();
 
+  QThread *camThread = new QThread;
+  camFeed->moveToThread(camThread);
+  QObject::connect(camThread, &QThread::started, camFeed,
+                   &CameraFeed::startCaptureLoop);
+
   // Wire up signals/slots
-  connectSignals(camFeed, segWorker, lensWorker, vp, backgrounds, debugGrid);
+  if (segWorker != nullptr) {
+    connectSignals(camFeed, segWorker, lensWorker, vp, backgrounds, debugGrid);
+  } else {
+    connectSignals(camFeed, colorWorker, lensWorker, vp, backgrounds,
+                   debugGrid);
+  }
+
+  camThread->start();
 
   // Prime initial background
   vp->setBackground(backgrounds->current());
@@ -232,18 +300,20 @@ int main(int argc, char **argv) {
   int ret = app.exec();
 
   // 9) Cleanup threads
-  segThread->quit();
-  segThread->wait();
+  maskThread->quit();
+  maskThread->wait();
   lensThread->quit();
   lensThread->wait();
+  camFeed->stopCaptureLoop();
   camThread->quit();
   camThread->wait();
 
   delete camFeed;
   delete segWorker;
+  delete colorWorker;
   delete lensWorker;
   delete camThread;
-  delete segThread;
+  delete maskThread;
   delete lensThread;
 
   return ret;

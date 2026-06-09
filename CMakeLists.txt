@@ -114,6 +114,7 @@ include_directories(
 # List all source files under src/ directory
 set(SOURCES
   src/main.cpp
+  src/color_mask.cpp
   src/segmentation_worker.cpp 
   src/lensing_worker.cpp
   src/viewport.cpp

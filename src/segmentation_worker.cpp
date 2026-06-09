@@ -201,7 +201,7 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
 
   // Convert logits → class map
   torch::Tensor probs = logits.squeeze(0).softmax(0);
-  torch::Tensor personProb_t = probs[dPersonClass_];
+  torch::Tensor personProb_t = probs[kPersonClass_];
 
 #endif
 

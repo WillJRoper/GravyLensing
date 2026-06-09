@@ -9,6 +9,7 @@ Here is an example of the debug mode showing the mask overlaying me awkwardly sa
 ## Features
 
 - **Live camera input**: Captures webcam feed and segments the person in real time.
+- **Adaptive color tracking mode**: Track a user-selected colored object and use it as the lens mask.
 - **Gravitational lens effect**: Applies FFT-based deflection to background images based on person mask.
 - **Multi-threaded**: Uses OpenMP and FFTW3 threaded plans for high performance.
 - **Qt6 GUI**: Displays the lensed output using Qt6 (with an optional debugging view).
@@ -206,16 +207,24 @@ Options:
   --flip                                             Flip the camera feed
                                                      horizontally?
   --roi, --selectROI                                 Select a region of
-                                                     interest (ROI) in the
-                                                     camera feed to apply the
-                                                     lensing effect. If not set,
-                                                     the full frame is used.
+                                                      interest (ROI) in the
+                                                      camera feed to apply the
+                                                      lensing effect. If not set,
+                                                      the full frame is used.
+  --maskMode <maskMode>                              Mask source to use:
+                                                     person or color
 ```
 
 For example, an efficient set up for running on a laptop with the output on the screen (requiring flipping) would be:
 
 ```bash
 ./gravy_lens --nthreads 12 --modelSize 512 --mp models/lraspp_torchscript-traced_float32_512_512.pt  --softening 50 --strength 4 --lowerRes 0.5 --secondsPerBackground 3 --flip --distortInside
+```
+
+To track a distinctively colored prop instead of a person mask:
+
+```bash
+./gravy_lens --nthreads 12 --maskMode color --softening 50 --strength 4 --lowerRes 0.5 --flip --distortInside
 ```
 
 ## Python Example
