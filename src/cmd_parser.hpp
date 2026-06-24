@@ -33,6 +33,9 @@
 #include <QApplication>
 #include <QCommandLineParser>
 
+// Local includes
+#include "settings.hpp"
+
 class CommandLineOptions {
 public:
   // Command-line options
@@ -51,27 +54,29 @@ public:
   bool selectROI;
   std::string maskMode;
   std::string modelPath;
+  std::string colorModeType;
 
   // Constructor is also the parser
-  static CommandLineOptions parse(QApplication &app) {
+  static CommandLineOptions parse(QApplication &app,
+                                  const AppSettings &defaults) {
     QCommandLineParser parser;
     parser.setApplicationDescription(
         "GravyLensing applies a gravitational lensing effect to images based "
         "on people detected in a camera feed.");
     parser.addHelpOption();
 
-    // --nthreads <int> (required)
+    // --nthreads <int>
     QCommandLineOption nthreadsOption(
         QStringList() << "n" << "nthreads",
         "Number of CPU threads used in the calculation (must be >= 2).",
-        "nthreads");
+        "nthreads", QString::number(defaults.nthreads));
     parser.addOption(nthreadsOption);
 
     // --strength <float> (default 0.1)
     QCommandLineOption strengthOption(
         QStringList() << "s" << "strength",
         "Strength factor for the lensing effect (float, default=0.1).",
-        "strength", "0.1");
+        "strength", QString::number(defaults.strength));
     parser.addOption(strengthOption);
 
     // --softening <float> (default 30.0)
@@ -79,7 +84,7 @@ public:
         QStringList() << "f" << "softening",
         "Softening radius in pixels applied to the lensing effect (float, "
         "default=30.0).",
-        "softening", "30.0");
+        "softening", QString::number(defaults.softening));
     parser.addOption(softeningOption);
 
     // --modelSize <int> (default 512)
@@ -87,14 +92,14 @@ public:
         QStringList() << "m" << "modelSize",
         "Segmentation model size, bigger means more accurate people but at the "
         "expense of frame rate (int, default=512).",
-        "modelSize", "512");
+        "modelSize", QString::number(defaults.modelSize));
     parser.addOption(modelSizeOption);
 
     // --device-index <int> (default 0)
     QCommandLineOption deviceIndexOption(
         QStringList() << "d" << "deviceIndex",
         "Device index, i.e. which camera to use (int, default=0).",
-        "deviceIndex", "0");
+        "deviceIndex", QString::number(defaults.deviceIndex));
     parser.addOption(deviceIndexOption);
 
     // --debug-grid  (flag only; no argument)
@@ -106,30 +111,31 @@ public:
     // --pad-factor <int> (default 2)
     QCommandLineOption padFactorOption(
         QStringList() << "p" << "padFactor",
-        "Padding factor for FFT (int, default=2).", "padFactor", "2");
+        "Padding factor for FFT (int, default=2).", "padFactor",
+        QString::number(defaults.padFactor));
     parser.addOption(padFactorOption);
 
-    // --model-path <string> (default "models/deeplabv3_mobilenet_v3_large.pt")
+    // --model-path <string>
     QCommandLineOption modelPathOption(
         QStringList() << "mp" << "modelPath",
         "Path to the segmentation model (string).", "modelPath",
-        "models/deeplab_quantized_model.pt");
+        QString::fromStdString(defaults.modelPath));
     parser.addOption(modelPathOption);
 
-    // --temporal smooth <float> (default 0.6)
+    // --temporal smooth <float> (default is loaded from settings)
     QCommandLineOption temporalSmoothOption(
         QStringList() << "t" << "temporalSmooth",
         "Temporal frame smoothing factor, i.e. how much of previous frames is "
         "used to smooth out temporal flucations in the person detection mask "
         "(float, default=0.25).",
-        "temporalSmooth", "0.25");
+        "temporalSmooth", QString::number(defaults.temporalSmooth));
     parser.addOption(temporalSmoothOption);
 
     // lowerRes <float> (default 1.0)
     QCommandLineOption lowerResOption(
         QStringList() << "lr" << "lowerRes",
         "Lower resolution factor for the lensing effect (float, default=1.0).",
-        "lowerRes", "1.0");
+        "lowerRes", QString::number(defaults.lowerRes));
     parser.addOption(lowerResOption);
 
     // secondsPerBackground <int> (default -1, i.e infinite)
@@ -137,7 +143,7 @@ public:
         QStringList() << "sb" << "secondsPerBackground",
         "Seconds per background image, if -1 then background images are "
         "selected through the 0-9 keys (int, default=-1).",
-        "secondsPerBackground", "-1");
+        "secondsPerBackground", QString::number(defaults.secondsPerBackground));
     parser.addOption(secondsPerBackgroundOption);
 
     // distortInside <bool> (flag only; no argument)
@@ -157,23 +163,10 @@ public:
         "lensing effect. If not set, the full frame is used.");
     parser.addOption(selectROIOption);
 
-    QCommandLineOption maskModeOption(
-        QStringList() << "maskMode",
-        "Mask source to use: 'person' for Torch segmentation or 'color' for "
-        "adaptive color tracking (default=person).",
-        "maskMode", "person");
-    parser.addOption(maskModeOption);
-
     parser.process(app);
 
-    // Validate required --nthreads
-    if (!parser.isSet(nthreadsOption)) {
-      std::cerr << "Error: --nthreads is required.\n";
-      parser.showHelp(1);
-    }
-
     bool ok;
-    CommandLineOptions opts;
+    CommandLineOptions opts{};
     opts.nthreads = parser.value(nthreadsOption).toInt(&ok);
     if (!ok || opts.nthreads < 2) {
       std::cerr << "Error: --nthreads must be an integer >= 2.\n";
@@ -204,11 +197,11 @@ public:
       std::exit(-1);
     }
 
-    opts.debugGrid = parser.isSet(debugGridOption);
+    opts.debugGrid = defaults.debugGrid || parser.isSet(debugGridOption);
 
     opts.padFactor = parser.value(padFactorOption).toInt(&ok);
     if (!ok) {
-      std::cerr << "Error: --padFactor must be a float.\n";
+      std::cerr << "Error: --padFactor must be an integer.\n";
       std::exit(-1);
     }
 
@@ -237,14 +230,11 @@ public:
       std::exit(-1);
     }
 
-    opts.distortInside = parser.isSet(distortInsideOption);
-    opts.flip = parser.isSet(flipOption);
-    opts.selectROI = parser.isSet(selectROIOption);
-    opts.maskMode = parser.value(maskModeOption).toStdString();
-    if (opts.maskMode != "person" && opts.maskMode != "color") {
-      std::cerr << "Error: --maskMode must be either 'person' or 'color'.\n";
-      std::exit(-1);
-    }
+    opts.distortInside = defaults.distortInside || parser.isSet(distortInsideOption);
+    opts.flip = defaults.flip || parser.isSet(flipOption);
+    opts.selectROI = defaults.selectROI || parser.isSet(selectROIOption);
+    opts.maskMode = defaults.maskMode;
+    opts.colorModeType = defaults.colorModeType;
 
     return opts;
   }
