@@ -57,12 +57,18 @@ public:
   // Check loaded model
   bool isModelLoaded() const { return modelLoaded_; }
 
+  // Whether this worker should process incoming frames.
+  bool isEnabled() const { return enabled_; }
+
   // ===================== Qt Slots ==================
 
 public Q_SLOTS:
 
   // Calculate a new mask when there is a new frame
   void onFrame(const cv::Mat &frame);
+
+  // Enable or disable mask generation while keeping the worker alive.
+  void setEnabled(bool enabled);
 
   // Update the geometry when the background changes
   void onBackgroundChange(const cv::Mat &background);
@@ -127,6 +133,9 @@ private:
 
   // Did we load successfully?
   bool modelLoaded_ = false;
+
+  // Whether this worker should process frames.
+  bool enabled_ = false;
 
   // ================== Member Function Prototypes ==================
 

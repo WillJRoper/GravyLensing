@@ -26,6 +26,7 @@
 #include <iostream>
 
 // Local includes
+#include "perf_log.hpp"
 #include "segmentation_worker.hpp"
 
 /**
@@ -264,25 +265,33 @@ void SegmentationWorker::updateGeometry(int width, int height) {
  * @param frame The new frame from the camera feed.
  */
 void SegmentationWorker::onFrame(const cv::Mat &frame) {
+  static thread_local PerfLog perf("person-mask", 60);
 
-  // Nothing to do until a background has been set
-  if (latestMask_.empty()) {
+  // Nothing to do until a background has been set or this mode is active.
+  if (!enabled_ || !modelLoaded_ || latestMask_.empty()) {
     return;
   }
 
   try {
+    const auto t0 = std::chrono::steady_clock::now();
 
     // Detect the person mask in the current frame
     detectPersonMask(frame);
 
     // Emit the mask ready signal
-    emit maskReady(latestMask_);
+    emit maskReady(latestMask_.clone());
+
+    const auto t1 = std::chrono::steady_clock::now();
+    perf.addSample(
+        std::chrono::duration<double, std::milli>(t1 - t0).count());
 
   } catch (const std::exception &e) {
     emit segmentationError("Segmentation error: " + std::string(e.what()));
     return;
   }
 }
+
+void SegmentationWorker::setEnabled(bool enabled) { enabled_ = enabled; }
 
 /**
  * @brief When the background changes, update the segmentation model.

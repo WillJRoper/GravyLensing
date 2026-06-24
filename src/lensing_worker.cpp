@@ -23,9 +23,87 @@
 
 // Standard includes
 #include <chrono>
+#include <cstring>
 
 // Local includes
 #include "lensing_worker.hpp"
+#include "perf_log.hpp"
+
+#ifdef USE_MPS
+#include "metal_helper.h"
+
+static const char *kRemapShader = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct RemapParams {
+    int width;
+    int height;
+    int padW;
+    int offX;
+    int offY;
+    float strength;
+    bool distortInside;
+};
+
+kernel void buildRemapMaps(
+    device const float *defX        [[buffer(0)]],
+    device const float *defY        [[buffer(1)]],
+    device const uchar  *mask       [[buffer(2)]],
+    device float *mapX              [[buffer(3)]],
+    device float *mapY              [[buffer(4)]],
+    constant RemapParams &params    [[buffer(5)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if (idx >= params.width * params.height) return;
+    int y = idx / params.width;
+    int x = idx - y * params.width;
+    
+    if (!params.distortInside && mask[idx] > 0) {
+        mapX[idx] = float(x);
+        mapY[idx] = float(y);
+        return;
+    }
+    
+    int pidx = (y + params.offY) * params.padW + (x + params.offX);
+    float dx = defX[pidx] * params.strength;
+    float dy = defY[pidx] * params.strength;
+    float xx = float(x) + dx;
+    float yy = float(y) + dy;
+    float maxX = float(params.width - 1);
+    float maxY = float(params.height - 1);
+    mapX[idx] = xx < 0.0f ? 0.0f : (xx > maxX ? maxX : xx);
+    mapY[idx] = yy < 0.0f ? 0.0f : (yy > maxY ? maxY : yy);
+}
+)";
+
+static metal::Pipeline *gRemapPipeline = nullptr;
+static metal::Buffers *gRemapBufs = nullptr;
+static int gRemapBufW = 0, gRemapBufH = 0, gRemapBufPW = 0;
+
+static void ensureRemapBuffers(int W, int H, int pW, int pH) {
+  if (gRemapBufW == W && gRemapBufH == H && gRemapBufPW == pW)
+    return;
+
+  metal::releaseBuffers(gRemapBufs);
+  gRemapBufs = nullptr;
+
+  int N2 = pH * pW;
+  int HW = H * W;
+  const unsigned long lens[] = {
+      (unsigned long)(N2 * sizeof(float)),    // defX
+      (unsigned long)(N2 * sizeof(float)),    // defY
+      (unsigned long)(HW * sizeof(uchar)),    // mask
+      (unsigned long)(HW * sizeof(float)),    // mapX
+      (unsigned long)(HW * sizeof(float)),    // mapY
+      64,                                      // params struct (padded)
+  };
+  gRemapBufs = metal::createBuffers(lens, 6);
+  gRemapBufW = W;
+  gRemapBufH = H;
+  gRemapBufPW = pW;
+}
+#endif
 
 /**
  * @brief Constructor for the LensingWorker class.
@@ -51,6 +129,17 @@ LensingWorker::LensingWorker(float strength, float softening, int padFactor,
       << "[LensingWorker] Number of threads (excluding those taken by Qt): "
       << nthreads_ << "\n";
   std::cout << "[LensingWorker] Lower resolution factor: " << lowerRes_ << "\n";
+}
+
+void LensingWorker::setStrength(float strength) {
+  strength_ = strength;
+  std::cout << "[LensingWorker] Strength updated to " << strength_ << "\n";
+}
+
+void LensingWorker::setDistortInside(bool distortInside) {
+  distortInside_ = distortInside;
+  std::cout << "[LensingWorker] DistortInside updated to "
+            << (distortInside_ ? "true" : "false") << "\n";
 }
 
 /**
@@ -302,29 +391,38 @@ void LensingWorker::applyLensing(const cv::Mat &mask) {
     const int offX = (pW - W) / 2;
     float *mx = reinterpret_cast<float *>(mapX_.data);
     float *my = reinterpret_cast<float *>(mapY_.data);
-    float *defX = defBuf_;      // first N2 floats
-    float *defY = defBuf_ + N2; // next N2 floats
-
+    float *defX = defBuf_;
+    float *defY = defBuf_ + N2;
     int HW = H * W;
+
+#ifdef USE_MPS
+    if (!gRemapPipeline) {
+      metal::init();
+      gRemapPipeline = metal::createPipeline("buildRemapMaps", kRemapShader);
+    }
+    ensureRemapBuffers(W, H, pW, pH);
+    if (gRemapPipeline && gRemapBufs) {
+      struct { int w, h, pw, ox, oy; float s; bool di; } params = {
+          W, H, pW, offX, offY, strength_, distortInside_};
+      const void *data[] = {defX, defY, mask.data, mx, my, &params};
+      metal::dispatchWithBuffers(gRemapPipeline, HW, gRemapBufs, data, 6);
+    } else
+#endif
+    {
 #pragma omp parallel for num_threads(nthreads_)
-    for (int idx = 0; idx < HW; ++idx) {
-      int y = idx / W, x = idx - y * W;
-
-      // ** skip masked pixels **
-      if (!distortInside_ && mask.at<uchar>(y, x) > 0) {
-        mx[idx] = float(x);
-        my[idx] = float(y);
-        continue;
+      for (int idx = 0; idx < HW; ++idx) {
+        int y = idx / W, x = idx - y * W;
+        if (!distortInside_ && mask.at<uchar>(y, x) > 0) {
+          mx[idx] = float(x);
+          my[idx] = float(y);
+          continue;
+        }
+        float dx = defX[(y + offY) * pW + (x + offX)] * strength_;
+        float dy = defY[(y + offY) * pW + (x + offX)] * strength_;
+        float xx = x + dx, yy = y + dy;
+        mx[idx] = xx < 0 ? 0 : (xx > W - 1 ? W - 1 : xx);
+        my[idx] = yy < 0 ? 0 : (yy > H - 1 ? H - 1 : yy);
       }
-
-      // otherwise apply the deflection
-      float dx = defX[(y + offY) * pW + (x + offX)] * strength_;
-      float dy = defY[(y + offY) * pW + (x + offX)] * strength_;
-      float xx = x + dx, yy = y + dy;
-
-      // clamp
-      mx[idx] = xx < 0 ? 0 : (xx > W - 1 ? W - 1 : xx);
-      my[idx] = yy < 0 ? 0 : (yy > H - 1 ? H - 1 : yy);
     }
   }
 
@@ -405,6 +503,7 @@ void LensingWorker::onBackgroundChange(const cv::Mat &background) {
  * @param mask The new mask image.
  */
 void LensingWorker::onMask(const cv::Mat &mask) {
+  static thread_local PerfLog perf("lensing", 60);
 
   // If we don't have a background, theres nothing to do
   if (currentBackground_.empty()) {
@@ -412,6 +511,7 @@ void LensingWorker::onMask(const cv::Mat &mask) {
   }
 
   try {
+    const auto t0 = std::chrono::steady_clock::now();
 
     // Apply the lensing effect
     applyLensing(mask);
@@ -424,7 +524,11 @@ void LensingWorker::onMask(const cv::Mat &mask) {
                0, 0, cv::INTER_LINEAR);
 
     // Emit the lensed image
-    emit lensedReady(upsampledLensed_);
+    emit lensedReady(upsampledLensed_.clone());
+
+    const auto t1 = std::chrono::steady_clock::now();
+    perf.addSample(
+        std::chrono::duration<double, std::milli>(t1 - t0).count());
 
   } catch (const std::exception &e) {
     emit lensingError("Lensing error: " + std::string(e.what()));

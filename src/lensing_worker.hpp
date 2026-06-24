@@ -58,6 +58,12 @@ public Q_SLOTS:
   // Update the geometry when the background changes
   void onBackgroundChange(const cv::Mat &background);
 
+  // Change lens strength at runtime (no rebuild required).
+  void setStrength(float strength);
+
+  // Toggle interior distortion at runtime.
+  void setDistortInside(bool distortInside);
+
 signals:
 
   // Signal to indicate that lensing is ready

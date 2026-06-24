@@ -32,52 +32,88 @@
 
 // Local includes
 #include "cam_feed.hpp"
+#include "perf_log.hpp"
 
 /**
  * @brief Display an interactive ROI selector and build a mask.
  *
- * This static helper opens a window to let the user draw a rectangular ROI
- * on the provided frame. If the user cancels, the full frame is used.
- * It returns both the selected rectangle and a binary mask of the same size.
+ * Uses a mouse-callback-based click-and-drag selector instead of
+ * cv::selectROI, which is unreliable alongside Qt on macOS (key
+ * presses can land in the Qt window instead of the OpenCV window).
  *
  * @param frame The image on which to select the ROI (modified for preview).
  * @param flip If true, the preview will be mirrored horizontally.
- * @return A pair consisting of the selected cv::Rect and its binary mask as
- * cv::Mat.
+ * @return A pair consisting of the selected cv::Rect and its binary mask.
  */
-static std::pair<cv::Rect, cv::Mat> selectROIAndMask(cv::Mat &frame,
-                                                     bool flip) {
+std::pair<cv::Rect, cv::Mat> selectROIAndMask(cv::Mat &frame, bool flip) {
 
-  // Mirror preview if requested
-  if (flip) {
+  if (flip)
     cv::flip(frame, frame, 1);
+
+  struct State {
+    cv::Point start{-1, -1};
+    cv::Point end{-1, -1};
+    bool drawing = false;
+    bool confirmed = false;
+    bool cancelled = false;
+  } state;
+
+  auto onMouse = [](int event, int x, int y, int, void *data) {
+    auto *s = static_cast<State *>(data);
+    if (event == cv::EVENT_LBUTTONDOWN) {
+      s->start = cv::Point(x, y);
+      s->end = cv::Point(x, y);
+      s->drawing = true;
+    } else if (event == cv::EVENT_MOUSEMOVE && s->drawing) {
+      s->end = cv::Point(x, y);
+    } else if (event == cv::EVENT_LBUTTONUP) {
+      s->end = cv::Point(x, y);
+      s->drawing = false;
+    }
+  };
+
+  const std::string winName = "Select ROI";
+  cv::namedWindow(winName, cv::WINDOW_AUTOSIZE);
+  cv::setMouseCallback(winName, onMouse, &state);
+
+  cv::Mat preview;
+  while (!state.confirmed && !state.cancelled) {
+    preview = frame.clone();
+    const char *instr =
+        "Drag to select ROI.  ENTER=confirm  ESC=cancel";
+    cv::putText(preview, instr, cv::Point(10, 30),
+                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 255, 255), 2);
+
+    if (state.start.x >= 0 && state.end.x >= 0) {
+      cv::Rect r(state.start, state.end);
+      if (r.width > 0 || r.height > 0)
+        cv::rectangle(preview, r, cv::Scalar(0, 255, 0), 2);
+    }
+
+    cv::imshow(winName, preview);
+    int key = cv::waitKey(30);
+    if (key == 13 || key == 32)       // Enter or Space
+      state.confirmed = true;
+    else if (key == 27 || key == 'c' || key == 'C')
+      state.cancelled = true;
   }
 
-  // Overlay instructions to the user
-  const std::string instructions =
-      "Drag to select Region of Interest: ENTER/SPACE confirm, 'c' cancel";
-  cv::putText(frame, instructions, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX,
-              0.7, cv::Scalar(255, 255, 255), 2);
+  cv::destroyWindow(winName);
 
-  // Show selector
-  cv::namedWindow("Select ROI", cv::WINDOW_AUTOSIZE);
-  cv::Rect sel = cv::selectROI("Select ROI", frame);
-  cv::destroyWindow("Select ROI");
-
-  // Record the selection and store the mask
   cv::Rect rect;
   cv::Mat mask;
-  if (sel.width > 0 && sel.height > 0) {
-    rect = sel;
-    mask = cv::Mat::zeros(frame.size(), CV_8UC1);
-    cv::rectangle(mask, sel, cv::Scalar(255), cv::FILLED);
+  if (state.confirmed && state.start.x >= 0 && state.end.x >= 0) {
+    rect = cv::Rect(state.start, state.end);
+    if (rect.width == 0 && rect.height == 0) {
+      // Single-click (no drag) — use full frame
+      rect = cv::Rect(0, 0, frame.cols, frame.rows);
+    }
   } else {
-    // Full-frame fallback
     rect = cv::Rect(0, 0, frame.cols, frame.rows);
-    mask = cv::Mat(frame.size(), CV_8UC1, cv::Scalar(255));
   }
 
-  // Return the selected rectangle and mask
+  mask = cv::Mat::zeros(frame.size(), CV_8UC1);
+  cv::rectangle(mask, rect, cv::Scalar(255), cv::FILLED);
   return {rect, mask};
 }
 
@@ -187,6 +223,15 @@ CameraFeed::~CameraFeed() {
     cap_.release();
 }
 
+void CameraFeed::setROI(cv::Rect rect, cv::Mat mask) {
+  std::lock_guard<std::mutex> lock(roiMutex_);
+  roiRect_ = rect;
+  roiMask_ = mask.clone();
+  doingROI_.store(true);
+  std::cout << "[CameraFeed] ROI updated: "
+            << roiRect_.width << "x" << roiRect_.height << "\n";
+}
+
 /**
  * @brief Initialize the camera feed.
  *
@@ -206,6 +251,25 @@ bool CameraFeed::initCamera() {
   if (!cap_.isOpened())
     return false;
 
+  // Discard the first several frames so auto-exposure can settle before
+  // we read a frame used for ROI/color selection.
+  cv::Mat warmup;
+  for (int i = 0; i < 15; ++i) {
+    cap_ >> warmup;
+  }
+
+  // Lock auto-exposure so the camera stops re-metering every time a bright
+  // OpenCV or Qt window appears on the monitor.  Leave auto-white-balance
+  // alone — locking it at the hardware default (often 0 K) destroys colour
+  // fidelity and makes colour tracking impossible.
+  if (!cap_.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.0)) {
+    // Some backends (e.g. V4L2) interpret 0.25 = manual, 0.75 = auto.
+    cap_.set(cv::CAP_PROP_AUTO_EXPOSURE, 0.25);
+  }
+
+  std::cout << "[CameraFeed] Exposure locked at "
+            << cap_.get(cv::CAP_PROP_EXPOSURE) << "\n";
+
   return true;
 }
 
@@ -218,12 +282,14 @@ bool CameraFeed::initCamera() {
 void CameraFeed::startCaptureLoop() {
 
   stopRequested_.store(false);
+  static thread_local PerfLog perf("capture", 120);
 
   // Define a local reusable header for the frame
   cv::Mat frame;
 
   // Loop until the end of time (or until the thread is stopped)
   while (!stopRequested_.load() && !QCoreApplication::closingDown()) {
+    const auto t0 = std::chrono::steady_clock::now();
 
     // Capture a frame from the camera
     if (!cap_.grab() || !cap_.retrieve(frame)) {
@@ -239,11 +305,23 @@ void CameraFeed::startCaptureLoop() {
 
     // Apply ROI mask, crop to ROI and emit if we are doing ROI selection,
     // otherwise just emit the full frame
-    if (doingROI_) {
-      emit frameCaptured(applyROIMaskAndCrop(frame, roiMask_, roiRect_));
+    if (doingROI_.load()) {
+      cv::Rect rect;
+      cv::Mat mask;
+      {
+        std::lock_guard<std::mutex> lock(roiMutex_);
+        rect = roiRect_;
+        mask = roiMask_;
+      }
+      emit frameCaptured(
+          applyROIMaskAndCrop(frame, mask, rect).clone());
     } else {
-      emit frameCaptured(frame);
+      emit frameCaptured(frame.clone());
     }
+
+    const auto t1 = std::chrono::steady_clock::now();
+    perf.addSample(
+        std::chrono::duration<double, std::milli>(t1 - t0).count());
   }
 }
 
@@ -260,8 +338,29 @@ cv::Mat CameraFeed::captureSetupFrame() {
     cv::flip(frame, frame, 1);
   }
 
-  if (doingROI_) {
-    return applyROIMaskAndCrop(frame, roiMask_, roiRect_);
+  if (doingROI_.load()) {
+    cv::Rect rect;
+    cv::Mat mask;
+    {
+      std::lock_guard<std::mutex> lock(roiMutex_);
+      rect = roiRect_;
+      mask = roiMask_;
+    }
+    return applyROIMaskAndCrop(frame, mask, rect);
+  }
+
+  return frame;
+}
+
+cv::Mat CameraFeed::captureSelectionFrame() {
+  cv::Mat frame;
+  if (!cap_.grab() || !cap_.retrieve(frame) || frame.empty()) {
+    emit captureError("Failed to capture selection frame");
+    return cv::Mat();
+  }
+
+  if (flip_) {
+    cv::flip(frame, frame, 1);
   }
 
   return frame;
