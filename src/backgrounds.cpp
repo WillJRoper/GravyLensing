@@ -47,8 +47,8 @@ const std::vector<std::string> Backgrounds::kImageExts = {
 Backgrounds *initBackgrounds(const std::string &dir) {
   Backgrounds *backgrounds = new Backgrounds(dir);
   if (!backgrounds->load()) {
-    qFatal("No images found in directory: %s", dir.c_str());
-    return nullptr;
+    std::cerr << "Fatal: No images found in directory: " << dir << "\n";
+    std::exit(EXIT_FAILURE);
   }
   return backgrounds;
 }
@@ -153,6 +153,7 @@ bool Backgrounds::previous() {
   if (images_.empty())
     return false;
   currentIdx_ = (currentIdx_ + images_.size() - 1) % images_.size();
+  emit backgroundChanged(images_[currentIdx_]);
   return true;
 }
 
