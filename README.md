@@ -9,19 +9,14 @@ Here is an example of the debug mode showing the mask overlaying me awkwardly sa
 ## Features
 
 - **Live camera input**: Captures webcam feed and segments the person in real time.
-- **Adaptive color tracking mode**: Track a user-selected colored object and use it as the lens mask.
-- **Gravitational lens effect**: Applies FFT-based deflection to background images based on person mask.
+- **Fixed Color Key mode**: Chroma-key style colour masking with a user-selected HSV target.
+- **Tracked Color Blob mode** (advanced): Connected-component blob tracking for more selective masking.
+- **Gravitational lens effect**: Applies FFT-based deflection to background images based on person mask or colour key.
 - **Multi-threaded**: Uses OpenMP and FFTW3 threaded plans for high performance.
 - **Qt6 GUI**: Displays the lensed output using Qt6 (with an optional debugging view).
-- **Segmentation model**: Uses a TorchScript-exported models for person mask extraction.
-- **Background cycling**: Load up to 10 images from `backgrounds/` and switch via key presses.
-
-## TODO:
-
-- Optimise segementation step to remove bottleneck and smooth out small scale variations.
-- Enable turning on and off of "lens" feed (i.e. the person) in output video feed.
-- Utilise GPUs when available.
-- Scalable lensing strength.
+- **Segmentation model**: Uses TorchScript-exported models for person mask extraction via MPS/GPU.
+- **Background cycling**: Load up to 10 images from `backgrounds/` and switch via key presses or menu.
+- **Session-driven settings**: All configuration is managed through persistent session settings with an explicit startup dialog. Live mode/debug-grid changes persist across restarts.
 
 ## Prerequisites
 
@@ -61,10 +56,14 @@ Install via your package manager (assuming you need everything):
 
   ```bash
   brew update
-  brew install cmake fftw opencv qt python@3.9
+  brew install cmake fftw libomp opencv qt python@3.9
   ```
 
-  If FFTW3 is installed in non-standard locations, you will need to set `FFTW3_ROOT` during configuration.
+  `libomp` is required for fresh CMake configures on macOS because AppleClang
+  does not ship OpenMP support by default.
+
+  If FFTW3 is installed in non-standard locations, you will need to set
+  `FFTW3_ROOT` during configuration.
 
 #### Installing libtorch
 
@@ -76,7 +75,7 @@ To build the release build:
 
 ```bash
 cmake -B build \
-  -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
+  -DCMAKE_PREFIX_PATH=/path/to/libtorch \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -- -j$(nproc)
 ```
@@ -86,16 +85,37 @@ Note that you may need to point directly to FFTW if it is installed in a nonstan
 ```bash
 cmake -B build \
   -DFFTW3_ROOT=/path/to/fftw3 \
-  -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
+  -DCMAKE_PREFIX_PATH=/path/to/libtorch \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release -- -j$(nproc)
 ```
 
+On macOS with Homebrew and a separate local libtorch install, a working
+configure can look like:
+
+```bash
+cmake -B build \
+  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qtbase;/opt/homebrew/opt/libomp;/path/to/libtorch" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+```
+
 The executable `gravy_lens` will then be placed in the project root.
 
-## Generating Segementation models
+### Optional: profiling
 
-Before running GravyLensing you will need some segmentation models to detect people in the frame. Included in the `models/` directory is a performance optimised model using LRASPP model that can be used out the box.
+To enable runtime profiling logs:
+
+```bash
+cmake -B build -DENABLE_PROFILING=ON
+```
+
+This adds periodic `[Perf] ...` log lines showing average ms and fps for each pipeline stage.
+Profiling is disabled by default and has zero runtime overhead when off.
+
+## Generating Segmentation models
+
+Before running GravyLensing you will need some segmentation models to detect people in the frame. Included in the `models/` directory is a performance optimised model using the LRASPP model that can be used out the box.
 
 However, we also provide a unified Python script, `get_models.py` (in the `models/` directory), to generate TorchScript for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
 
@@ -117,17 +137,17 @@ python get_models.py \
 ```
 
 - `--model`
-  - `deeplab` DeepLabV3 MobileNetV3 Large
-  - `lraspp` LR-ASPP MobileNetV3 Large
+  - `deeplab` DeepLabV3 MobileNetV3 Large
+  - `lraspp` LR-ASPP MobileNetV3 Large
 - `--format`
-  - `torchscript-scripted` uses `torch.jit.script(…)`
-  - `torchscript-traced` uses `torch.jit.trace(…)` with a fixed dummy shape
-  - `quantized` dynamic int8 quantization + scripted export (best CPU latency)
-  - `onnx` ONNX opset 14 with dynamic axes (batch, height, width)
-- `--device` (default `cpu`) load the model on CPU or GPU
-- `--width`, `--height` (dummy input spatial size; default `320×320`)
+  - `torchscript-scripted` uses `torch.jit.script(...)`
+  - `torchscript-traced` uses `torch.jit.trace(...)` with a fixed dummy shape
+  - `quantized` dynamic int8 quantization + scripted export (best CPU latency)
+  - `onnx` ONNX opset 14 with dynamic axes (batch, height, width)
+- `--device` (default `cpu`) load the model on CPU or GPU
+- `--width`, `--height` (dummy input spatial size; default `320x320`)
 
-**Output**  
+**Output**
 The script always writes to:
 
 ```
@@ -154,78 +174,91 @@ python get_models.py \
 
 ## Usage
 
+### Quick start
+
+Launch the app; the session setup dialog opens. Configure your pipeline and click `Start Session`.
+
+```bash
+./gravy_lens
+```
+
+### CLI arguments
+
+CLI arguments seed the session setup dialog with initial values. All flags are optional — any omitted value uses the last saved session setting.
+
 ```
 Usage: ./gravy_lens [options]
-GravyLensing applies a gravitational lensing effect to images based on people detected in a camera feed.
 
 Options:
-  -h, --help                                         Displays help on
-                                                     commandline options.
-  --help-all                                         Displays help, including
-                                                     generic Qt options.
-  -n, --nthreads <nthreads>                          Number of CPU threads used
-                                                     in the calculation (must be
-                                                     >= 2).
-  -s, --strength <strength>                          Strength factor for the
-                                                     lensing effect (float,
-                                                     default=0.1).
-  -f, --softening <softening>                        Softening radius in pixels
-                                                     applied to the lensing
-                                                     effect (float,
-                                                     default=30.0).
-  -m, --modelSize <modelSize>                        Segmentation model size,
-                                                     bigger means more accurate
-                                                     people but at the expense
-                                                     of frame rate (int,
-                                                     default=512).
-  -d, --deviceIndex <deviceIndex>                    Device index, i.e. which
-                                                     camera to use (int,
-                                                     default=0).
-  -g, --debugGrid                                    Show a debugging grid with
-                                                     the camera feed, mask, and
-                                                     lensed image.
-  -p, --padFactor <padFactor>                        Padding factor for FFT
-                                                     (int, default=2).
-  --mp, --modelPath <modelPath>                      Path to the segmentation
-                                                     model (string).
-  -t, --temporalSmooth <temporalSmooth>              Temporal frame smoothing
-                                                     factor, i.e. how much of
-                                                     previous frames is used to
-                                                     smooth out temporal
-                                                     flucations in the person
-                                                     detection mask (float,
-                                                     default=0.25).
-  --lr, --lowerRes <lowerRes>                        Lower resolution factor
-                                                     for the lensing effect
-                                                     (float, default=1.0).
-  --sb, --secondsPerBackground <secondsPerBackground Seconds per background
-  >                                                  image, if -1 then
-                                                     background images are
-                                                     selected through the 0-9
-                                                     keys (int, default=-1).
-  --di, --distortInside                              Distort inside the mask?
-  --flip                                             Flip the camera feed
-                                                     horizontally?
-  --roi, --selectROI                                 Select a region of
-                                                      interest (ROI) in the
-                                                      camera feed to apply the
-                                                      lensing effect. If not set,
-                                                      the full frame is used.
-  --maskMode <maskMode>                              Mask source to use:
-                                                     person or color
+  -n, --nthreads <n>            CPU threads (must be >= 2).
+  -s, --strength <f>            Lens strength factor (default 0.1).
+  -f, --softening <f>           Softening radius in pixels (default 30.0).
+  -m, --modelSize <n>           Segmentation model size (default 512).
+  -d, --deviceIndex <n>         Camera device index (default 0).
+  -g, --debugGrid               Show 2x2 diagnostic grid at start.
+  -p, --padFactor <n>           FFT padding factor (default 2).
+  --mp, --modelPath <path>      TorchScript model path.
+  -t, --temporalSmooth <f>      Temporal smoothing factor (default 0.25).
+  --lr, --lowerRes <f>          Resolution scale for lensing (default 1.0).
+  --sb, --secondsPerBackground <n>  Seconds per background; -1 = manual (default -1).
+  --di, --distortInside          Distort inside the mask as well.
+  --flip                         Mirror camera feed horizontally.
+  --roi, --selectROI            Open ROI selector on first session start.
 ```
 
-For example, an efficient set up for running on a laptop with the output on the screen (requiring flipping) would be:
+### Example session
+
+A tuned setup for running on a laptop:
 
 ```bash
-./gravy_lens --nthreads 12 --modelSize 512 --mp models/lraspp_torchscript-traced_float32_512_512.pt  --softening 50 --strength 4 --lowerRes 0.5 --secondsPerBackground 3 --flip --distortInside
+./gravy_lens --nthreads 12 --modelSize 512 --mp models/lraspp_torchscript-traced_float32_512_512.pt --softening 50 --strength 4 --lowerRes 0.5 --secondsPerBackground 3 --flip --distortInside
 ```
 
-To track a distinctively colored prop instead of a person mask:
+Choose `Person` mode in the session setup dialog and click `Start Session`.
 
-```bash
-./gravy_lens --nthreads 12 --maskMode color --softening 50 --strength 4 --lowerRes 0.5 --flip --distortInside
-```
+### Mask modes
+
+**Person (`Person (AI segmentation)`)** uses a TorchScript segmentation model and (where available) MPS / GPU acceleration. This is the smoothest mode.
+
+**Color (`Color tracking`)** has two submodes, selected in the `Color Detection` section of the session settings:
+
+- **Fixed Color Key** (default): Behaves like a chroma-key matte. Pixels within a fixed HSV tolerance range of the selected target colour produce a mask. This is the fastest, most stable colour mode.
+
+- **Tracked Color Blob** (advanced): Uses connected-components and blob-continuity heuristics to track a specific coloured region across frames. This mode can lose the blob even when keyed pixels are present; useful when you want to track a single object rather than every instance of a colour.
+
+### Colour target selection
+
+In colour mode, after starting the session:
+
+- Choose (or re-choose) the target with `Shift+S` or `File > Select Color...`.
+- The colour picker opens on the current camera frame. Click the target object, or press `Esc` / `c` to cancel.
+- The selected target and its tolerances persist across session restarts.
+
+### During a session
+
+| Action | Shortcut | Menu |
+|--------|----------|------|
+| Select / reselect colour | `Shift+S` | File > Select Color... |
+| Select region of interest | `Shift+R` | File > Select Region... |
+| Toggle debug grid | `Shift+D` | View > Debug Grid |
+| Switch mask mode | `Shift+M` | View > Mask Mode |
+| Switch background | `0`–`9` | View > Background |
+| Open session settings | `Cmd+,` | Session > Session Settings... |
+| Quit | `Esc` / `Cmd+Q` | File > Quit |
+
+### Restarting a session
+
+To change pipeline settings mid-session:
+
+1. Open `Session > Session Settings...`
+2. Edit configuration
+3. Click `Restart Session`
+
+The current colour target and ROI are preserved across the restart where possible.
+
+### Color mode tips
+
+Color mode works best when the tracked object is strongly coloured, the background does not contain similar colours, and the lighting stays fairly stable. You do not need a segmentation model when running in colour mode.
 
 ## Python Example
 
