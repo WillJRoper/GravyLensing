@@ -517,7 +517,6 @@ void LensingWorker::onMask(const cv::Mat &mask) {
     applyLensing(mask);
 
     // Resample back to the original size
-    cv::Mat upsampledLensed_;
     cv::resize(latestLensed_, upsampledLensed_,
                cv::Size(latestLensed_.cols / lowerRes_,
                         latestLensed_.rows / lowerRes_),

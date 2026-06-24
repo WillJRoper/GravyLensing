@@ -420,14 +420,16 @@ bool ColorMaskWorker::buildCandidateMask(const cv::Mat &frame) {
     }
   }
 
+  static const cv::Mat kOpenKernelMat =
+      cv::getStructuringElement(cv::MORPH_ELLIPSE,
+                                cv::Size(kOpenKernel_, kOpenKernel_));
+  static const cv::Mat kCloseKernelMat =
+      cv::getStructuringElement(cv::MORPH_ELLIPSE,
+                                cv::Size(kCloseKernel_, kCloseKernel_));
   cv::morphologyEx(candidateMask_, cleanedMask_, cv::MORPH_OPEN,
-                   cv::getStructuringElement(cv::MORPH_ELLIPSE,
-                                             cv::Size(kOpenKernel_,
-                                                      kOpenKernel_)));
+                   kOpenKernelMat);
   cv::morphologyEx(cleanedMask_, cleanedMask_, cv::MORPH_CLOSE,
-                   cv::getStructuringElement(cv::MORPH_ELLIPSE,
-                                             cv::Size(kCloseKernel_,
-                                                      kCloseKernel_)));
+                   kCloseKernelMat);
   return true;
 }
 

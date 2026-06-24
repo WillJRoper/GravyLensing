@@ -61,7 +61,7 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
   smallFrame_.create(fastH_, fastW_, CV_8UC3);
   rgbFrame_.create(fastH_, fastW_, CV_8UC3);
   fastMask_.create(fastH_, fastW_, CV_8UC1);
-  prevPersonProb_.create(fastH_, fastW_, CV_8UC1);
+  prevPersonProb_.create(fastH_, fastW_, CV_32F);
   smoothMask_.create(fastH_, fastW_, CV_8UC1);
 
   // Set up the segmentation model

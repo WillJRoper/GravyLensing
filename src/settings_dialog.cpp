@@ -434,6 +434,14 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             autoCycleCheck_->setChecked(defaults.secondsPerBackground > 0);
             secondsPerBackgroundSpin_->setValue(
                 std::max(1, defaults.secondsPerBackground));
+
+            // Reset ROI and colour-pick state
+            hasROI_ = false;
+            roiX_ = roiY_ = roiW_ = roiH_ = 0;
+            roiInfoLabel_->setText("No region selected — full frame in use.");
+            colorPickRequested_ = false;
+            pickedHue_ = pickedSat_ = pickedVal_ = 0;
+            updateSwatchDisplay(false);
             debugGridCheck_->setChecked(defaults.debugGrid);
             modelPathEdit_->setCursorPosition(
                 modelPathEdit_->text().size());

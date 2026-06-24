@@ -126,6 +126,7 @@ private:
   // Some matrices we can reuse during lens application
   cv::Mat padded_;
   cv::Mat paddedF_;
+  cv::Mat upsampledLensed_;
 
   // Are we distorting inside the mask?
   bool distortInside_;
