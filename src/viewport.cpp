@@ -24,274 +24,281 @@
  */
 #include "viewport.hpp"
 
-// Qt includes
 #include <QApplication>
 #include <QGridLayout>
 #include <QKeyEvent>
+#include <QMenuBar>
 #include <QPixmap>
 #include <QScreen>
 #include <QSizePolicy>
 #include <QVBoxLayout>
 
-/**
- * @brief Convert cv::Mat to QImage without copying pixel data.
- *
- * This function converts a cv::Mat object to a QImage object
- * without copying the pixel data. It handles different color formats
- * such as CV_8UC3, CV_8UC1, and CV_8UC4.
- *
- * @param mat The cv::Mat object to convert.
- *
- * @return A QImage object representing the cv::Mat data.
- */
+#include "perf_log.hpp"
+#include "settings_dialog.hpp"
+
 static QImage MatToQImage(const cv::Mat &mat) {
   switch (mat.type()) {
   case CV_8UC3:
-    // BGR888 exists in Qt6; no need to rgbSwap or copy
     return QImage(mat.data, mat.cols, mat.rows, int(mat.step),
                   QImage::Format_BGR888);
-
   case CV_8UC1:
     return QImage(mat.data, mat.cols, mat.rows, int(mat.step),
                   QImage::Format_Grayscale8);
-
   case CV_8UC4:
     return QImage(mat.data, mat.cols, mat.rows, int(mat.step),
                   QImage::Format_ARGB32);
-
   default:
     return QImage();
   }
 }
 
-/**
- * @brief ViewPort constructor.
- *
- * This constructor initializes the ViewPort class and sets up
- * the labels for displaying images.
- *
- * @param parent The parent widget (default is nullptr).
- */
-ViewPort::ViewPort(QWidget *parent)
-    : QMainWindow(parent), imageLabel_(new QLabel),
-      backgroundLabel_(new QLabel), lensLabel_(new QLabel),
-      maskLabel_(new QLabel) {
-  // Make labels scale their pixmaps to fit
+ViewPort::ViewPort(const AppSettings &settings, QWidget *parent)
+    : QMainWindow(parent), imageLabel_(new QLabel(this)),
+      backgroundLabel_(new QLabel(this)), lensLabel_(new QLabel(this)),
+      maskLabel_(new QLabel(this)), settings_(settings) {
+
   for (auto lbl : {imageLabel_, backgroundLabel_, lensLabel_, maskLabel_}) {
     lbl->setScaledContents(true);
     lbl->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
   }
 
-  // Make the main window the size of the screen
+  setupViewLayout();
+  setupMenuBar();
   showMaximized();
 }
 
-/**
- * @brief ViewPort destructor.
- *
- * This destructor cleans up the ViewPort class.
- */
 ViewPort::~ViewPort() = default;
 
-/**
- * @brief Set the image to be displayed in the viewport.
- *
- * This function sets the image to be displayed in the viewport
- * by converting it to a QImage and setting it as a pixmap.
- *
- * @param image The cv::Mat object representing the image.
- */
-void ViewPort::setImage(const cv::Mat &image) {
-  // 1) shallow‐copy header only (no pixel data copy)
-  image_ = image;
+// ─────────────────────────────────────────────────────────────────────────────
+//  View layout  (single grid — visibility toggle, no widgets destroyed)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // 2) wrap image_.data in a QImage—no deep copy
-  QImage qi = MatToQImage(image_);
-
-  // 3) QPixmap::fromImage does the one necessary copy into the widget
-  imageLabel_->setPixmap(QPixmap::fromImage(qi));
-}
-
-/**
- * @brief Set the background image to be displayed in the viewport.
- *
- * This function sets the background image to be displayed in the viewport
- * by converting it to a QImage and setting it as a pixmap.
- *
- * @param background The cv::Mat object representing the background image.
- */
-void ViewPort::setBackground(const cv::Mat &background) {
-  // shallow‐copy header only
-  background_ = background;
-
-  // wrap without copying
-  QImage qi = MatToQImage(background_);
-
-  // single copy into the widget's pixmap
-  backgroundLabel_->setPixmap(QPixmap::fromImage(qi));
-}
-
-/**
- * @brief Set the lens image to be displayed in the viewport.
- *
- * This function sets the lens image to be displayed in the viewport
- * by converting it to a QImage and setting it as a pixmap.
- *
- * @param lens The cv::Mat object representing the lens image.
- */
-void ViewPort::setLens(const cv::Mat &lens) {
-  // shallow‐copy header only
-  lens_ = lens;
-
-  // wrap without copying
-  QImage qi = MatToQImage(lens_);
-
-  // single copy into the widget's pixmap
-  lensLabel_->setPixmap(QPixmap::fromImage(qi));
-}
-
-/**
- * @brief Set the mask image to be displayed in the viewport.
- *
- * This function sets the mask image to be displayed in the viewport
- * by converting it to a QImage and setting it as a pixmap.
- *
- * @param mask The cv::Mat object representing the mask image.
- */
-void ViewPort::setMask(const cv::Mat &mask) {
-  // shallow‐copy header only
-  mask_ = mask;
-
-  // If you want a red overlay you could convert here,
-  // but to keep it zero‐copy just display it directly:
-  QImage qi = MatToQImage(mask_);
-
-  maskLabel_->setPixmap(QPixmap::fromImage(qi));
-}
-
-/**
- * @brief Show the lensed view in the viewport.
- *
- * This function sets up the viewport to display only the lensed image.
- */
-void ViewPort::showLensedView() {
-  // Single‐pane view
-  QWidget *w = new QWidget(this);
-  auto *layout = new QVBoxLayout(w);
-  layout->addWidget(lensLabel_);
-  setCentralWidget(w);
-
-  // Resize window to exactly the lensed‐image resolution
-  if (!lens_.empty()) {
-    // note: cols = width, rows = height
-    resize(lens_.cols, lens_.rows);
-  }
-}
-
-/**
- * @brief Show the grid view in the viewport.
- *
- * This function sets up the viewport to display a 2×2 grid of images:
- * raw frame, mask, overlay, and lensed background.
- */
-void ViewPort::showGridView() {
-  // Create a new central widget and 2×2 grid layout
+void ViewPort::setupViewLayout() {
   QWidget *w = new QWidget(this);
   auto *grid = new QGridLayout(w);
   grid->setContentsMargins(0, 0, 0, 0);
   grid->setSpacing(0);
 
-  // Add only the four image labels:
-  grid->addWidget(imageLabel_, 0, 0);      // top-left: raw frame
-  grid->addWidget(maskLabel_, 0, 1);       // top-right: mask
-  grid->addWidget(backgroundLabel_, 1, 0); // bottom-left: overlay
-  grid->addWidget(lensLabel_, 1, 1);       // bottom-right: lensed
+  imageLabel_->setVisible(false);
+  maskLabel_->setVisible(false);
+  backgroundLabel_->setVisible(false);
+
+  grid->addWidget(imageLabel_, 0, 0);
+  grid->addWidget(maskLabel_, 0, 1);
+  grid->addWidget(backgroundLabel_, 1, 0);
+  // lensLabel_ starts spanning all cells (full window)
+  grid->addWidget(lensLabel_, 0, 0, 2, 2);
 
   setCentralWidget(w);
-
-  // Resize window to exactly fit 2×2 of the frame size
-  if (!image_.empty()) {
-    int w0 = image_.cols;
-    int h0 = image_.rows;
-    resize(w0 * 2, h0 * 2);
-  }
 }
 
-/**
- * @brief Handle key press events in the viewport.
- *
- * This function handles key press events in the viewport.
- * It allows switching between background images and quitting the application.
- *
- * @param event The QKeyEvent object representing the key press event.
- */
-void ViewPort::keyPressEvent(QKeyEvent *event) {
-  int k = event->key();
+void ViewPort::setDebugGridEnabled(bool enabled) {
+  QGridLayout *grid =
+      qobject_cast<QGridLayout *>(centralWidget()->layout());
+  if (!grid) return;
 
-  // Exit condition
-  if (k == Qt::Key_Escape) {
-    qApp->quit();
-  }
-
-  // Background swapping
-  else if (k >= Qt::Key_0 && k <= Qt::Key_9) {
-    // Map '0'..'9' → 0..9
-    size_t idx = static_cast<size_t>(k - Qt::Key_0);
-
-    // If we don't have a background object, bail!
-    if (!backgrounds_) {
-      std::cerr << "No background attached to viewport." << std::endl;
-      std::exit(EXIT_FAILURE);
-    }
-
-    // Cool, we have what we expect, switch the background (which will have
-    // a knock on effect of updating everything else via signals). Throw an
-    // error if it failed.
-    if (!backgrounds_->setIndex(idx)) {
-      std::cerr << "No background loaded at index " << idx << "; only have "
-                << backgrounds_->size() << " images." << std::endl;
-      std::cerr << "Press '0'..'" << backgrounds_->size() - 1
-                << "' to switch backgrounds." << std::endl;
-    }
-  }
-
-  // Let Qt handle anything else (arrows, function keys, etc.)
-  else {
-    QMainWindow::keyPressEvent(event);
-  }
-}
-
-/**
- * @brief Setup the viewport with the specified background images.
- *
- * This function sets up the viewport with the specified background images
- * and displays the first image.
- *
- * @param backgrounds The Backgrounds object containing the background images.
- *
- * @return The VeiwPort object.
- */
-ViewPort *initViewport(Backgrounds *backgrounds, bool debugGrid) {
-
-  // Create the viewport
-  ViewPort *vp = new ViewPort();
-
-  // Set the view port title
-  vp->setWindowTitle("GravyLensing");
-
-  // Attach the backgrounds instance
-  vp->setBackgroundImages(backgrounds);
-
-  // Show the appropriate view (when debugging we show a gird of 4 images
-  // to help debug what the program is doing)
-  if (debugGrid) {
-    vp->showGridView();
+  if (enabled) {
+    // Move lensLabel back to its single cell
+    grid->addWidget(lensLabel_, 1, 1);
+    imageLabel_->setVisible(true);
+    maskLabel_->setVisible(true);
+    backgroundLabel_->setVisible(true);
   } else {
-    vp->showLensedView();
+    // Span lensLabel across the full 2×2 grid
+    grid->addWidget(lensLabel_, 0, 0, 2, 2);
+    imageLabel_->setVisible(false);
+    maskLabel_->setVisible(false);
+    backgroundLabel_->setVisible(false);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Menu bar
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ViewPort::setupMenuBar() {
+  QMenuBar *mb = menuBar();
+
+  // ── File ──────────────────────────────────────────────────────────
+  QMenu *fileMenu = mb->addMenu("&File");
+
+  QAction *selectROIAction = fileMenu->addAction("Select &Region...");
+  selectROIAction->setShortcut(QKeySequence("Shift+R"));
+  selectROIAction->setToolTip("Draw a region of interest on the camera feed.");
+  connect(selectROIAction, &QAction::triggered, this,
+          &ViewPort::selectROIRequested);
+
+  selectColorAction_ = fileMenu->addAction("Select &Color...");
+  selectColorAction_->setShortcut(QKeySequence("Shift+S"));
+  selectColorAction_->setToolTip("Pick an HSV colour to track.");
+  connect(selectColorAction_, &QAction::triggered, this,
+          &ViewPort::selectColorRequested);
+
+  fileMenu->addSeparator();
+
+  QAction *quitAction = fileMenu->addAction("&Quit");
+  quitAction->setShortcut(QKeySequence::Quit);
+  quitAction->setMenuRole(QAction::QuitRole);
+  connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
+
+  // ── View ──────────────────────────────────────────────────────────
+  QMenu *viewMenu = mb->addMenu("&View");
+
+  debugGridAction_ = viewMenu->addAction("Debug &Grid");
+  debugGridAction_->setCheckable(true);
+  debugGridAction_->setShortcut(QKeySequence("Shift+D"));
+  debugGridAction_->setToolTip("Toggle the 2x2 diagnostic view.");
+  connect(debugGridAction_, &QAction::toggled, this,
+          &ViewPort::debugGridToggled);
+
+  toggleMaskAction_ = viewMenu->addAction("Mask Mode: &Person");
+  toggleMaskAction_->setShortcut(QKeySequence("Shift+M"));
+  toggleMaskAction_->setToolTip("Switch AI person segmentation / HSV colour tracking.");
+  connect(toggleMaskAction_, &QAction::triggered, this,
+          &ViewPort::toggleMaskModeRequested);
+
+  viewMenu->addSeparator();
+
+  QMenu *bgMenu = viewMenu->addMenu("&Background");
+  bgMenu->setToolTip("Quickly switch between loaded background images.");
+  bgActionGroup_ = new QActionGroup(this);
+  bgActionGroup_->setExclusive(true);
+
+  for (int i = 0; i < 10; ++i) {
+    QAction *a = bgMenu->addAction(QString("Background &%1").arg(i));
+    a->setCheckable(true);
+    a->setShortcut(QKeySequence(QString::number(i)));
+    a->setToolTip(QString("Switch to background image %1.").arg(i));
+    bgActionGroup_->addAction(a);
+    bgActions_.append(a);
+    connect(a, &QAction::triggered, this,
+            [this, i]() { emit backgroundIndexSelected(static_cast<size_t>(i)); });
   }
 
-  // Show it, we're up and running!
-  vp->show();
+  // ── Session ───────────────────────────────────────────────────────
+  QMenu *settingsMenu = mb->addMenu("&Session");
 
+  QAction *prefsAction = settingsMenu->addAction("Session &Settings...");
+  prefsAction->setShortcut(QKeySequence::Preferences);
+  prefsAction->setMenuRole(QAction::PreferencesRole);
+  connect(prefsAction, &QAction::triggered, this, [this]() {
+    SettingsDialog dlg(settings_, "Session Settings", "Restart Session",
+                       targetHue_, targetSat_, targetVal_, hasTarget_,
+                       hasROI_, roiX_, roiY_, roiW_, roiH_,
+                       this);
+    if (dlg.exec() == QDialog::Accepted) {
+      if (dlg.roiSelectRequested()) {
+        emit selectROIRequested();
+        return;
+      }
+      if (dlg.colorPickRequested()) {
+        targetHue_ = dlg.pickedHue();
+        targetSat_ = dlg.pickedSat();
+        targetVal_ = dlg.pickedVal();
+        hasTarget_ = true;
+      }
+      settings_ = dlg.settings();
+      emit settingsChanged(settings_);
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Menu state slots
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ViewPort::setDebugGridChecked(bool checked) {
+  if (debugGridAction_) {
+    debugGridAction_->blockSignals(true);
+    debugGridAction_->setChecked(checked);
+    debugGridAction_->blockSignals(false);
+  }
+}
+
+void ViewPort::setMaskModeLabel(bool isColorMode) {
+  if (toggleMaskAction_)
+    toggleMaskAction_->setText(isColorMode ? "Mask Mode: &Color"
+                                           : "Mask Mode: &Person");
+}
+
+void ViewPort::setBackgroundIndexChecked(size_t idx) {
+  if (idx < static_cast<size_t>(bgActions_.size()))
+    bgActions_[static_cast<int>(idx)]->setChecked(true);
+}
+
+void ViewPort::setColorModeActive(bool active) {
+  if (selectColorAction_) {
+    selectColorAction_->setEnabled(true);
+    selectColorAction_->setText(active ? "Reselect &Color..."
+                                      : "Select &Color...");
+  }
+}
+
+void ViewPort::setBackgroundImages(Backgrounds *backgrounds) {
+  backgrounds_ = backgrounds;
+  if (!backgrounds)
+    return;
+
+  const size_t count = backgrounds->size();
+  for (int i = 0; i < bgActions_.size(); ++i) {
+    bgActions_[i]->setEnabled(static_cast<size_t>(i) < count);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Image display
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ViewPort::setImage(const cv::Mat &image) {
+  static PerfLog perf("ui-image", 120);
+  const auto t0 = std::chrono::steady_clock::now();
+  image_ = image;
+  imageLabel_->setPixmap(QPixmap::fromImage(MatToQImage(image_)));
+  const auto t1 = std::chrono::steady_clock::now();
+  perf.addSample(std::chrono::duration<double, std::milli>(t1 - t0).count());
+}
+
+void ViewPort::setBackground(const cv::Mat &background) {
+  background_ = background;
+  backgroundLabel_->setPixmap(QPixmap::fromImage(MatToQImage(background_)));
+}
+
+void ViewPort::setLens(const cv::Mat &lens) {
+  static PerfLog perf("ui-lens", 120);
+  const auto t0 = std::chrono::steady_clock::now();
+  lens_ = lens;
+  lensLabel_->setPixmap(QPixmap::fromImage(MatToQImage(lens_)));
+  const auto t1 = std::chrono::steady_clock::now();
+  perf.addSample(std::chrono::duration<double, std::milli>(t1 - t0).count());
+}
+
+void ViewPort::setMask(const cv::Mat &mask) {
+  mask_ = mask;
+  maskLabel_->setPixmap(QPixmap::fromImage(MatToQImage(mask_)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Key press
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ViewPort::keyPressEvent(QKeyEvent *event) {
+  if (event->key() == Qt::Key_Escape) {
+    qApp->quit();
+    return;
+  }
+  QMainWindow::keyPressEvent(event);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Init helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+ViewPort *initViewport(Backgrounds *backgrounds, const AppSettings &settings,
+                       bool debugGrid) {
+  ViewPort *vp = new ViewPort(settings);
+  vp->setWindowTitle("GravyLensing");
+  vp->setBackgroundImages(backgrounds);
+  vp->setDebugGridEnabled(debugGrid);
+  vp->setDebugGridChecked(debugGrid);
   return vp;
 }
