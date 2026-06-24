@@ -6,6 +6,12 @@ project(GravyLensing LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(ENABLE_PROFILING "Enable lightweight runtime profiling logs" OFF)
+
+if(ENABLE_PROFILING)
+  add_definitions(-DGRAVY_ENABLE_PROFILING)
+endif()
+
 # Define USE_MPS on macOS to enable MPS checks
 if(APPLE)
   add_definitions(-DUSE_MPS)
@@ -13,6 +19,15 @@ endif()
 
 # ============================================================================
 # OpenMP Configuration
+# Homebrew installs libomp as a keg-only dependency on macOS, so help CMake
+# find it during fresh configures.
+if(APPLE)
+  list(APPEND CMAKE_PREFIX_PATH
+    "/opt/homebrew/opt/libomp"
+    "/usr/local/opt/libomp"
+  )
+endif()
+
 # Find and enable OpenMP
 find_package(OpenMP REQUIRED)
 if(OpenMP_CXX_FOUND)
@@ -120,7 +135,12 @@ set(SOURCES
   src/viewport.cpp
   src/cam_feed.cpp
   src/backgrounds.cpp
+  src/settings_dialog.cpp
 )
+
+if(APPLE)
+  list(APPEND SOURCES src/metal_helper.mm)
+endif()
 
 # ============================================================================
 # Build target
@@ -166,3 +186,37 @@ set_property(TARGET gravy_lens PROPERTY ENABLE_EXPORTS ON)
 
 # Install the executable into the 'bin' directory of the install prefix
 install(TARGETS gravy_lens RUNTIME DESTINATION bin)
+
+# ============================================================================
+# Unit tests
+# ============================================================================
+option(BUILD_TESTS "Build unit tests" ON)
+
+if(BUILD_TESTS)
+  add_executable(test_color_mask
+    src/color_mask.cpp
+    tests/test_color_mask.cpp
+  )
+
+  if(APPLE)
+    target_sources(test_color_mask PRIVATE src/metal_helper.mm)
+    target_link_libraries(test_color_mask PRIVATE
+      "-framework Foundation"
+      "-framework Metal"
+    )
+  endif()
+
+  target_link_libraries(test_color_mask PRIVATE
+    Qt6::Core
+    ${OpenCV_LIBS}
+  )
+
+  set_property(TARGET test_color_mask PROPERTY ENABLE_EXPORTS ON)
+
+  set_target_properties(test_color_mask PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.."
+  )
+
+  enable_testing()
+  add_test(NAME color_mask COMMAND test_color_mask)
+endif()
