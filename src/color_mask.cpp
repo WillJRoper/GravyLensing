@@ -124,7 +124,7 @@ ColorMaskWorker::ColorMaskWorker(const cv::Mat &initialFrame, float lowerRes)
 ColorMaskWorker::ColorMaskWorker(float lowerRes) : lowerRes_(lowerRes) {}
 
 ColorMaskWorker::ColorMaskWorker(float hue, float sat, float val,
-                                  int width, int height, float lowerRes)
+                                   int width, int height, float lowerRes)
     : lowerRes_(lowerRes),
       targetHue_(hue),
       targetSat_(sat),
@@ -136,6 +136,57 @@ ColorMaskWorker::ColorMaskWorker(float hue, float sat, float val,
   // Defer geometry creation to caller — matches interactive-path behaviour.
   ensureFrameBuffers(cv::Size(width, height));
   ready_ = true;
+}
+
+void ColorMaskWorker::submitFrame(const cv::Mat &frame) {
+  if (frame.empty()) {
+    return;
+  }
+
+  bool shouldSchedule = false;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    pendingFrame_ = frame;
+    if (!pendingFrameDrainScheduled_) {
+      pendingFrameDrainScheduled_ = true;
+      shouldSchedule = true;
+    }
+  }
+
+  if (shouldSchedule) {
+    QMetaObject::invokeMethod(this, [this]() { drainPendingFrame(); },
+                              Qt::QueuedConnection);
+  }
+}
+
+void ColorMaskWorker::drainPendingFrame() {
+  cv::Mat frame;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    if (pendingFrame_.empty()) {
+      pendingFrameDrainScheduled_ = false;
+      return;
+    }
+    frame = std::move(pendingFrame_);
+    pendingFrame_.release();
+  }
+
+  onFrame(frame);
+
+  bool shouldContinue = false;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    if (pendingFrame_.empty()) {
+      pendingFrameDrainScheduled_ = false;
+    } else {
+      shouldContinue = true;
+    }
+  }
+
+  if (shouldContinue) {
+    QMetaObject::invokeMethod(this, [this]() { drainPendingFrame(); },
+                              Qt::QueuedConnection);
+  }
 }
 
 // Keep error reporting in one place so startup and runtime failures behave the

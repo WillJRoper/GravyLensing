@@ -31,6 +31,9 @@
 #include <opencv2/opencv.hpp>
 
 // Local includes
+#ifdef __APPLE__
+#include "avfoundation_camera.hpp"
+#endif
 #include "cam_feed.hpp"
 #include "perf_log.hpp"
 
@@ -163,7 +166,11 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
   }
 
   // Ensure we have opened a valid camera with a valid index
+#ifdef __APPLE__
+  if (!avCamera_) {
+#else
   if (!cap_.isOpened()) {
+#endif
     emit captureError("Failed to open camera device " +
                       std::to_string(deviceIndex_));
     isOpen_ = false;
@@ -175,7 +182,7 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
 
   // Check we are getting frames at all
   cv::Mat testFrame;
-  if (!cap_.read(testFrame) || testFrame.empty()) {
+  if (!readFrame(testFrame, true) || testFrame.empty()) {
     emit captureError("Failed to read initial frame from camera device " +
                       std::to_string(deviceIndex_));
     return;
@@ -184,6 +191,11 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
   std::cout << "[CameraFeed] Camera " << deviceIndex_
             << " opened successfully.\n";
   std::cout << "[CameraFeed] Camera resolution: "
+#ifdef __APPLE__
+            << avCamera_->width() << "x" << avCamera_->height() << "\n";
+  std::cout << "[CameraFeed] Camera FPS target: " << avCamera_->fps() << "\n";
+  std::cout << "[CameraFeed] Camera backend: " << avCamera_->backendName() << "\n";
+#else
             << cap_.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
             << cap_.get(cv::CAP_PROP_FRAME_HEIGHT) << "\n";
   std::cout << "[CameraFeed] Camera FPS: " << cap_.get(cv::CAP_PROP_FPS)
@@ -192,6 +204,7 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
             << "\n";
   std::cout << "[CameraFeed] Camera backend: " << cap_.get(cv::CAP_PROP_BACKEND)
             << "\n";
+#endif
 
   // If we aren't selecting an ROI we are done and can move on
   if (!doingROI_) {
@@ -200,7 +213,7 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
 
   // Grab frame for ROI selection
   cv::Mat firstFrame;
-  if (!cap_.read(firstFrame) || firstFrame.empty()) {
+  if (!readFrame(firstFrame, true) || firstFrame.empty()) {
     emit captureError("Failed to grab initial frame for ROI selection");
     return;
   }
@@ -219,6 +232,11 @@ CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
  * This destructor releases the camera feed if it is opened.
  */
 CameraFeed::~CameraFeed() {
+#ifdef __APPLE__
+  if (avCamera_) {
+    avCamera_->close();
+  }
+#endif
   if (cap_.isOpened())
     cap_.release();
 }
@@ -241,15 +259,34 @@ void CameraFeed::setROI(cv::Rect rect, cv::Mat mask) {
  * @return true if the camera is opened successfully, false otherwise.
  */
 bool CameraFeed::initCamera() {
+#ifdef __APPLE__
+  avCamera_ = std::make_unique<AvFoundationCamera>(deviceIndex_);
+  std::string error;
+  if (!avCamera_->open(error)) {
+    std::cerr << "[CameraFeed] AVFoundation open failed: " << error << "\n";
+    avCamera_.reset();
+    return false;
+  }
+  return true;
+#else
 
   // Check if the camera is already opened
   if (cap_.isOpened())
     cap_.release();
 
-  // Open the camera device
+  // Open the camera device. On macOS, prefer AVFoundation explicitly so we
+  // avoid backend ambiguity and can tune the capture path for lower latency.
+#ifdef __APPLE__
+  cap_.open(deviceIndex_, cv::CAP_AVFOUNDATION);
+#else
   cap_.open(deviceIndex_);
+#endif
   if (!cap_.isOpened())
     return false;
+
+  // Ask OpenCV to keep as little camera-side buffering as the backend allows.
+  // Unsupported properties are ignored by OpenCV/backends.
+  cap_.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
   // Discard the first several frames so auto-exposure can settle before
   // we read a frame used for ROI/color selection.
@@ -269,8 +306,31 @@ bool CameraFeed::initCamera() {
 
   std::cout << "[CameraFeed] Exposure locked at "
             << cap_.get(cv::CAP_PROP_EXPOSURE) << "\n";
+  std::cout << "[CameraFeed] Active backend: "
+            << cap_.get(cv::CAP_PROP_BACKEND) << "\n";
 
   return true;
+#endif
+}
+
+bool CameraFeed::readFrame(cv::Mat &frame, bool latestOnly) {
+#ifdef __APPLE__
+  if (!avCamera_) {
+    return false;
+  }
+  if (latestOnly) {
+    return avCamera_->latestFrame(frame);
+  }
+  if (avCamera_->waitForFrame(frame, 500, &stopRequested_)) {
+    return true;
+  }
+  return !stopRequested_.load() && avCamera_->latestFrame(frame);
+#else
+  if (latestOnly) {
+    return cap_.read(frame) && !frame.empty();
+  }
+  return cap_.grab() && cap_.retrieve(frame) && !frame.empty();
+#endif
 }
 
 /**
@@ -292,7 +352,7 @@ void CameraFeed::startCaptureLoop() {
     const auto t0 = std::chrono::steady_clock::now();
 
     // Capture a frame from the camera
-    if (!cap_.grab() || !cap_.retrieve(frame)) {
+    if (!readFrame(frame)) {
       emit captureError("Frame capture failed");
       std::cout << "[CameraFeed] Frame capture failed\n";
       break;
@@ -329,7 +389,7 @@ void CameraFeed::stopCaptureLoop() { stopRequested_.store(true); }
 
 cv::Mat CameraFeed::captureSetupFrame() {
   cv::Mat frame;
-  if (!cap_.grab() || !cap_.retrieve(frame) || frame.empty()) {
+  if (!readFrame(frame, true) || frame.empty()) {
     emit captureError("Failed to capture setup frame");
     return cv::Mat();
   }
@@ -354,7 +414,7 @@ cv::Mat CameraFeed::captureSetupFrame() {
 
 cv::Mat CameraFeed::captureSelectionFrame() {
   cv::Mat frame;
-  if (!cap_.grab() || !cap_.retrieve(frame) || frame.empty()) {
+  if (!readFrame(frame, true) || frame.empty()) {
     emit captureError("Failed to capture selection frame");
     return cv::Mat();
   }

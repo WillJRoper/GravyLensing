@@ -32,6 +32,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QScrollArea>
+#include <QSlider>
 #include <QSizePolicy>
 #include <QVBoxLayout>
 
@@ -42,6 +43,9 @@ static QDoubleSpinBox *makeDoubleSpin(double min, double max, double step,
   s->setRange(min, max);
   s->setSingleStep(step);
   s->setDecimals(decimals);
+  s->setAccelerated(true);
+  s->setKeyboardTracking(false);
+  s->setMinimumWidth(120);
   if (!suffix.isEmpty())
     s->setSuffix(suffix);
   if (!tooltip.isEmpty())
@@ -54,6 +58,9 @@ static QSpinBox *makeIntSpin(int min, int max, int step, const QString &suffix,
   auto *s = new QSpinBox;
   s->setRange(min, max);
   s->setSingleStep(step);
+  s->setAccelerated(true);
+  s->setKeyboardTracking(false);
+  s->setMinimumWidth(120);
   if (!suffix.isEmpty())
     s->setSuffix(suffix);
   if (!tooltip.isEmpty())
@@ -66,6 +73,34 @@ static QCheckBox *makeCheck(const QString &text, const QString &tooltip) {
   if (!tooltip.isEmpty())
     c->setToolTip(tooltip);
   return c;
+}
+
+static QLabel *makeFormLabel(const QString &text, const QString &tooltip,
+                             QWidget *buddy = nullptr) {
+  auto *label = new QLabel(text);
+  label->setToolTip(tooltip);
+  if (buddy != nullptr)
+    label->setBuddy(buddy);
+  return label;
+}
+
+static void configureFormLayout(QFormLayout *form) {
+  form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  form->setFormAlignment(Qt::AlignTop);
+  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+  form->setHorizontalSpacing(14);
+  form->setVerticalSpacing(10);
+}
+
+static void addFormRow(QFormLayout *form, const QString &label,
+                       const QString &tooltip, QWidget *field) {
+  form->addRow(makeFormLabel(label, tooltip, field), field);
+}
+
+static void addFormRow(QFormLayout *form, const QString &label,
+                       const QString &tooltip, QLayout *fieldLayout) {
+  form->addRow(makeFormLabel(label, tooltip), fieldLayout);
 }
 
 SettingsDialog::SettingsDialog(const AppSettings &settings,
@@ -117,24 +152,26 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   // ── Camera group ────────────────────────────────────────────────────
   auto *cameraGroup = new QGroupBox("Camera");
   auto *cameraForm = new QFormLayout(cameraGroup);
-  cameraForm->setLabelAlignment(Qt::AlignRight);
+  configureFormLayout(cameraForm);
 
   deviceIndexSpin_ = makeIntSpin(0, 99, 1, {},
       "Which camera device to open (0 is the built-in webcam).");
   deviceIndexSpin_->setValue(settings.deviceIndex);
-  cameraForm->addRow("Device index", deviceIndexSpin_);
+  addFormRow(cameraForm, "Device index", deviceIndexSpin_->toolTip(),
+             deviceIndexSpin_);
 
   flipCheck_ = makeCheck("Mirror camera feed horizontally",
       "Flip the image so movement in the real world and on-screen are "
       "directionally consistent.");
   flipCheck_->setChecked(settings.flip);
-  cameraForm->addRow("Flip", flipCheck_);
+  addFormRow(cameraForm, "Flip", flipCheck_->toolTip(), flipCheck_);
 
   selectROICheck_ = makeCheck("Show region selector at startup",
       "On the next pipeline start, open an interactive ROI selection "
       "window.");
   selectROICheck_->setChecked(settings.selectROI);
-  cameraForm->addRow("Region of interest", selectROICheck_);
+  addFormRow(cameraForm, "Region of interest", selectROICheck_->toolTip(),
+             selectROICheck_);
 
   leftColumn->addWidget(cameraGroup);
 
@@ -182,7 +219,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   // ── Mode (mask type selection) ─────────────────────────────────────
   auto *modeGroup = new QGroupBox("Mode");
   auto *modeForm = new QFormLayout(modeGroup);
-  modeForm->setLabelAlignment(Qt::AlignRight);
+  configureFormLayout(modeForm);
 
   maskModeCombo_ = new QComboBox;
   maskModeCombo_->setToolTip(
@@ -192,13 +229,14 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   maskModeCombo_->addItem("Color tracking", "color");
   if (settings.maskMode == "color")
     maskModeCombo_->setCurrentIndex(1);
-  modeForm->addRow("Mask mode", maskModeCombo_);
+  addFormRow(modeForm, "Mask mode", maskModeCombo_->toolTip(),
+             maskModeCombo_);
   leftColumn->addWidget(modeGroup);
 
   // ── Person Detection group ──────────────────────────────────────────
   auto *personGroup = new QGroupBox("Person Detection");
   auto *personForm = new QFormLayout(personGroup);
-  personForm->setLabelAlignment(Qt::AlignRight);
+  configureFormLayout(personForm);
 
   {
     auto *row = new QHBoxLayout;
@@ -213,7 +251,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     browseBtn_->setToolTip("Open a file dialog to locate the segmentation model.");
     row->addWidget(modelPathEdit_, 1);
     row->addWidget(browseBtn_);
-    personForm->addRow("Model path", row);
+    addFormRow(personForm, "Model path",
+               "Path to the TorchScript segmentation model to load.", row);
     connect(browseBtn_, &QPushButton::clicked, this,
             &SettingsDialog::browseModelPath);
     connect(modelPathEdit_, &QLineEdit::textChanged, this,
@@ -223,13 +262,15 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   modelSizeSpin_ = makeIntSpin(128, 1024, 128, " px",
       "Larger models capture finer mask detail but run slower.");
   modelSizeSpin_->setValue(settings.modelSize);
-  personForm->addRow("Model size", modelSizeSpin_);
+  addFormRow(personForm, "Model size", modelSizeSpin_->toolTip(),
+             modelSizeSpin_);
 
   temporalSmoothSpin_ = makeDoubleSpin(0.0, 1.0, 0.05, 2, {},
       "Higher values blend the mask more heavily with the previous frame, "
       "reducing flicker at the cost of responsiveness.");
   temporalSmoothSpin_->setValue(static_cast<double>(settings.temporalSmooth));
-  personForm->addRow("Temporal smooth", temporalSmoothSpin_);
+  addFormRow(personForm, "Temporal smooth", temporalSmoothSpin_->toolTip(),
+             temporalSmoothSpin_);
 
   leftColumn->addWidget(personGroup);
 
@@ -237,7 +278,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   auto *colorGroup = new QGroupBox("Color Detection");
   auto *colorLayout = new QVBoxLayout(colorGroup);
   auto *colorForm = new QFormLayout;
-  colorForm->setLabelAlignment(Qt::AlignRight);
+  configureFormLayout(colorForm);
 
   colorModeTypeCombo_ = new QComboBox;
   colorModeTypeCombo_->setToolTip(
@@ -247,23 +288,27 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   colorModeTypeCombo_->addItem("Tracked Color Blob", "tracked_blob");
   if (settings.colorModeType == "tracked_blob")
     colorModeTypeCombo_->setCurrentIndex(1);
-  colorForm->addRow("Mode", colorModeTypeCombo_);
+  addFormRow(colorForm, "Mode", colorModeTypeCombo_->toolTip(),
+             colorModeTypeCombo_);
 
   colorHueTolSpin_ = makeIntSpin(1, 90, 1, {},
       "Wider values include more hues around the target. "
       "Hue wraps at 0/180.");
   colorHueTolSpin_->setValue(settings.colorHueTol);
-  colorForm->addRow("Hue tolerance", colorHueTolSpin_);
+  addFormRow(colorForm, "Hue tolerance", colorHueTolSpin_->toolTip(),
+             colorHueTolSpin_);
 
   colorSatTolSpin_ = makeIntSpin(1, 255, 5, {},
       "Wider values include more saturation variation.");
   colorSatTolSpin_->setValue(settings.colorSatTol);
-  colorForm->addRow("Saturation tolerance", colorSatTolSpin_);
+  addFormRow(colorForm, "Saturation tolerance", colorSatTolSpin_->toolTip(),
+             colorSatTolSpin_);
 
   colorValTolSpin_ = makeIntSpin(1, 255, 5, {},
       "Wider values include more brightness variation.");
   colorValTolSpin_->setValue(settings.colorValTol);
-  colorForm->addRow("Value tolerance", colorValTolSpin_);
+  addFormRow(colorForm, "Value tolerance", colorValTolSpin_->toolTip(),
+             colorValTolSpin_);
 
   // Current target preview (click opens QColorDialog)
   {
@@ -285,7 +330,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     swatchLabel_->setWordWrap(true);
     swatchRow->addWidget(swatchLabel_, 1);
     updateSwatchDisplay(hasTarget);
-    colorForm->addRow("Target", swatchRow);
+    addFormRow(colorForm, "Target",
+               "Current keyed colour. Click the swatch to edit it manually.",
+               swatchRow);
   }
 
   colorLayout->addLayout(colorForm);
@@ -300,44 +347,73 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   // ── Lensing Effect group ────────────────────────────────────────────
   auto *lensGroup = new QGroupBox("Lensing Effect");
   auto *lensForm = new QFormLayout(lensGroup);
-  lensForm->setLabelAlignment(Qt::AlignRight);
+  configureFormLayout(lensForm);
 
-  strengthSpin_ = makeDoubleSpin(0.0, 10.0, 0.01, 3, {},
+  strengthSpin_ = makeDoubleSpin(0.0, 10.0, 0.05, 2, {},
       "Strength multiplier applied to the deflection field. Larger "
       "values produce more dramatic lensing.");
   strengthSpin_->setValue(static_cast<double>(settings.strength));
-  lensForm->addRow("Strength", strengthSpin_);
+  addFormRow(lensForm, "Strength", strengthSpin_->toolTip(), strengthSpin_);
 
-  softeningSpin_ = makeDoubleSpin(0.0, 200.0, 1.0, 1, " px",
+  softeningSpin_ = makeDoubleSpin(0.0, 200.0, 1.0, 0, " px",
       "Softens the deflection kernel so nearby background pixels are "
       "affected more smoothly.");
   softeningSpin_->setValue(static_cast<double>(settings.softening));
-  lensForm->addRow("Softening radius", softeningSpin_);
+  addFormRow(lensForm, "Softening radius", softeningSpin_->toolTip(),
+             softeningSpin_);
 
   padFactorSpin_ = makeIntSpin(1, 10, 1, {},
       "FFT padding multiplier. Larger values reduce wrap-around "
       "artifacts but use more memory.");
   padFactorSpin_->setValue(settings.padFactor);
-  lensForm->addRow("FFT pad factor", padFactorSpin_);
+  addFormRow(lensForm, "FFT pad factor", padFactorSpin_->toolTip(),
+             padFactorSpin_);
 
   lowerResSpin_ = makeDoubleSpin(0.1, 1.0, 0.1, 2, {},
       "Fraction of the background resolution at which lensing is "
       "computed. 1.0 = full resolution; 0.5 = half resolution (faster).");
   lowerResSpin_->setValue(static_cast<double>(settings.lowerRes));
-  lensForm->addRow("Resolution scale", lowerResSpin_);
+  {
+    auto *row = new QHBoxLayout;
+    auto *lowerResSlider = new QSlider(Qt::Horizontal);
+    lowerResSlider->setRange(10, 100);
+    lowerResSlider->setSingleStep(5);
+    lowerResSlider->setPageStep(10);
+    lowerResSlider->setToolTip(lowerResSpin_->toolTip());
+    lowerResSlider->setValue(
+        static_cast<int>(std::round(lowerResSpin_->value() * 100.0)));
+    row->addWidget(lowerResSlider, 1);
+    row->addWidget(lowerResSpin_);
+
+    connect(lowerResSlider, &QSlider::valueChanged, this,
+            [this](int value) {
+              const double scaled = static_cast<double>(value) / 100.0;
+              if (!qFuzzyCompare(lowerResSpin_->value(), scaled))
+                lowerResSpin_->setValue(scaled);
+            });
+    connect(lowerResSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this, [lowerResSlider](double value) {
+              const int scaled = static_cast<int>(std::round(value * 100.0));
+              if (lowerResSlider->value() != scaled)
+                lowerResSlider->setValue(scaled);
+            });
+
+    addFormRow(lensForm, "Resolution scale", lowerResSpin_->toolTip(), row);
+  }
 
   distortInsideCheck_ = makeCheck("Distort inside the mask",
       "When enabled, the interior of the mask is also lensed (not only "
       "the background around it).");
   distortInsideCheck_->setChecked(settings.distortInside);
-  lensForm->addRow("Inside mask", distortInsideCheck_);
+  addFormRow(lensForm, "Inside mask", distortInsideCheck_->toolTip(),
+             distortInsideCheck_);
 
   rightColumn->addWidget(lensGroup);
 
   // ── Backgrounds group ──────────────────────────────────────────────
   auto *bgGroup = new QGroupBox("Backgrounds");
   auto *bgForm = new QFormLayout(bgGroup);
-  bgForm->setLabelAlignment(Qt::AlignRight);
+  configureFormLayout(bgForm);
 
   {
     auto *row = new QHBoxLayout;
@@ -353,7 +429,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
         "Select a folder containing background images.");
     row->addWidget(backgroundsDirEdit_, 1);
     row->addWidget(browseBgBtn_);
-    bgForm->addRow("Directory", row);
+    addFormRow(bgForm, "Directory",
+               "Folder containing the backgrounds exposed in the UI.", row);
     connect(browseBgBtn_, &QPushButton::clicked, this, [this]() {
       const QString dir = QFileDialog::getExistingDirectory(
           this, "Select Backgrounds Folder", backgroundsDirEdit_->text());
@@ -371,7 +448,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
       "When enabled, the background changes automatically after the "
       "specified interval. When disabled, switch manually with 0–9 keys.");
   autoCycleCheck_->setChecked(settings.secondsPerBackground > 0);
-  bgForm->addRow("Auto-cycle", autoCycleCheck_);
+  addFormRow(bgForm, "Auto-cycle", autoCycleCheck_->toolTip(),
+             autoCycleCheck_);
 
   secondsPerBackgroundSpin_ = new QSpinBox;
   secondsPerBackgroundSpin_->setRange(1, 3600);
@@ -384,26 +462,29 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   secondsPerBackgroundSpin_->setEnabled(settings.secondsPerBackground > 0);
   connect(autoCycleCheck_, &QCheckBox::toggled, secondsPerBackgroundSpin_,
           &QSpinBox::setEnabled);
-  bgForm->addRow("Cycle interval", secondsPerBackgroundSpin_);
+  addFormRow(bgForm, "Cycle interval", secondsPerBackgroundSpin_->toolTip(),
+             secondsPerBackgroundSpin_);
 
   rightColumn->addWidget(bgGroup);
 
   // ── Performance group ───────────────────────────────────────────────
   auto *perfGroup = new QGroupBox("Performance");
   auto *perfForm = new QFormLayout(perfGroup);
-  perfForm->setLabelAlignment(Qt::AlignRight);
+  configureFormLayout(perfForm);
 
   nthreadsSpin_ = makeIntSpin(2, 256, 1, {},
       "Number of CPU worker threads (Qt reserves 3; the remainder are "
       "used for FFT and segmentation work).");
   nthreadsSpin_->setValue(settings.nthreads);
-  perfForm->addRow("CPU threads", nthreadsSpin_);
+  addFormRow(perfForm, "CPU threads", nthreadsSpin_->toolTip(),
+             nthreadsSpin_);
 
   debugGridCheck_ = makeCheck("Show diagnostic grid",
       "Display the 2×2 debug view (camera, mask, background, lensed) "
       "instead of the lensed-only view.");
   debugGridCheck_->setChecked(settings.debugGrid);
-  perfForm->addRow("Debug grid", debugGridCheck_);
+  addFormRow(perfForm, "Debug grid", debugGridCheck_->toolTip(),
+             debugGridCheck_);
 
   rightColumn->addWidget(perfGroup);
 

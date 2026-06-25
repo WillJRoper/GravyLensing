@@ -25,6 +25,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <memory>
 #include <utility>
 
 // Qt includes
@@ -32,6 +33,10 @@
 
 // External includes
 #include <opencv2/opencv.hpp>
+
+#ifdef __APPLE__
+class AvFoundationCamera;
+#endif
 
 /**
  * @brief CameraFeed class
@@ -89,12 +94,17 @@ signals:
 
 private:
   bool initCamera(); ///< Called by ctor to open cap_
+  bool readFrame(cv::Mat &frame, bool latestOnly = false);
 
   // The device index for the camera (0 for default camera)
   int deviceIndex_;
 
   // OpenCV video capture object
   cv::VideoCapture cap_;
+
+#ifdef __APPLE__
+  std::unique_ptr<AvFoundationCamera> avCamera_;
+#endif
 
   // ROI selection and mask — protected by roiMutex_ when accessed from
   // outside the capture thread.

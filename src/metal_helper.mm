@@ -126,8 +126,11 @@ Buffers *createBuffers(const unsigned long *lengths, int bufferCount) {
   return b;
 }
 
-void dispatchWithBuffers(Pipeline *p, int gridWidth, Buffers *b,
-                         const void **dataPtrs, int bufferCount) {
+void dispatchWithBuffersSelective(Pipeline *p, int gridWidth, Buffers *b,
+                                  const void **dataPtrs,
+                                  const bool *uploadMask,
+                                  const bool *downloadMask,
+                                  int bufferCount) {
   if (!p || !b || !gQueue)
     return;
 
@@ -138,7 +141,10 @@ void dispatchWithBuffers(Pipeline *p, int gridWidth, Buffers *b,
 
   for (int i = 0; i < bufferCount; ++i) {
     id<MTLBuffer> buf = b->bufs[i];
-    memcpy([buf contents], dataPtrs[i], b->lengths[i]);
+    const bool shouldUpload = uploadMask == nullptr || uploadMask[i];
+    if (shouldUpload) {
+      memcpy([buf contents], dataPtrs[i], b->lengths[i]);
+    }
     [enc setBuffer:buf offset:0 atIndex:i];
   }
 
@@ -154,9 +160,18 @@ void dispatchWithBuffers(Pipeline *p, int gridWidth, Buffers *b,
 
   // Download output data back to the caller's CPU pointers.
   for (int i = 0; i < bufferCount; ++i) {
-    memcpy(const_cast<void *>(dataPtrs[i]), [b->bufs[i] contents],
-           b->lengths[i]);
+    const bool shouldDownload = downloadMask == nullptr || downloadMask[i];
+    if (shouldDownload) {
+      memcpy(const_cast<void *>(dataPtrs[i]), [b->bufs[i] contents],
+             b->lengths[i]);
+    }
   }
+}
+
+void dispatchWithBuffers(Pipeline *p, int gridWidth, Buffers *b,
+                         const void **dataPtrs, int bufferCount) {
+  dispatchWithBuffersSelective(p, gridWidth, b, dataPtrs, nullptr, nullptr,
+                               bufferCount);
 }
 
 void releasePipeline(Pipeline *p) {

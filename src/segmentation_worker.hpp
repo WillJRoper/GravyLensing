@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include <mutex>
+
 // Qt includes
 #include <QDebug>
 #include <QObject>
@@ -56,6 +58,9 @@ public:
 
   // Check loaded model
   bool isModelLoaded() const { return modelLoaded_; }
+
+  // Thread-safe frame submission that coalesces stale work.
+  void submitFrame(const cv::Mat &frame);
 
   // Whether this worker should process incoming frames.
   bool isEnabled() const { return enabled_; }
@@ -147,6 +152,11 @@ private:
 
   // Update the geometry when the background changes
   void updateGeometry(int width, int height);
+  void drainPendingFrame();
+
+  std::mutex pendingFrameMutex_;
+  cv::Mat pendingFrame_;
+  bool pendingFrameDrainScheduled_ = false;
 };
 
 /**

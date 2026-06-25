@@ -77,6 +77,57 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
   std::cout << "[SegmentationWorker] Loaded model from " << modelPath_ << "\n";
 }
 
+void SegmentationWorker::submitFrame(const cv::Mat &frame) {
+  if (frame.empty()) {
+    return;
+  }
+
+  bool shouldSchedule = false;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    pendingFrame_ = frame;
+    if (!pendingFrameDrainScheduled_) {
+      pendingFrameDrainScheduled_ = true;
+      shouldSchedule = true;
+    }
+  }
+
+  if (shouldSchedule) {
+    QMetaObject::invokeMethod(this, [this]() { drainPendingFrame(); },
+                              Qt::QueuedConnection);
+  }
+}
+
+void SegmentationWorker::drainPendingFrame() {
+  cv::Mat frame;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    if (pendingFrame_.empty()) {
+      pendingFrameDrainScheduled_ = false;
+      return;
+    }
+    frame = std::move(pendingFrame_);
+    pendingFrame_.release();
+  }
+
+  onFrame(frame);
+
+  bool shouldContinue = false;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    if (pendingFrame_.empty()) {
+      pendingFrameDrainScheduled_ = false;
+    } else {
+      shouldContinue = true;
+    }
+  }
+
+  if (shouldContinue) {
+    QMetaObject::invokeMethod(this, [this]() { drainPendingFrame(); },
+                              Qt::QueuedConnection);
+  }
+}
+
 /**
  * @brief Set up the segmentation model.
  *

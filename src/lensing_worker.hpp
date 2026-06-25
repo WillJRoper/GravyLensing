@@ -24,6 +24,7 @@
 #pragma once
 
 // Standard includes
+#include <mutex>
 
 // Qt includes
 #include <QObject>
@@ -49,6 +50,9 @@ public:
 
   // Destructor
   ~LensingWorker();
+
+  // Thread-safe mask submission that coalesces stale work.
+  void submitMask(const cv::Mat &mask);
 
 public Q_SLOTS:
 
@@ -153,4 +157,9 @@ private:
 
   // Update the geometry of the lensing effect
   void updateGeometry(int width, int height);
+  void drainPendingMask();
+
+  std::mutex pendingMaskMutex_;
+  cv::Mat pendingMask_;
+  bool pendingMaskDrainScheduled_ = false;
 };

@@ -312,6 +312,55 @@ int main(int argc, char **argv) {
     frameToColorConnection = QMetaObject::Connection();
   };
 
+  const auto attachPersonWorker = [&](SegmentationWorker *worker) {
+    if (worker == nullptr) {
+      return;
+    }
+
+    QObject::connect(worker, &SegmentationWorker::maskReady, lensWorker,
+                     [lensWorker](const cv::Mat &mask) {
+                       if (lensWorker)
+                         lensWorker->submitMask(mask);
+                     },
+                     Qt::DirectConnection);
+    QObject::connect(backgrounds, &Backgrounds::backgroundChanged, worker,
+                     &SegmentationWorker::onBackgroundChange,
+                     Qt::QueuedConnection);
+    QObject::connect(worker, &SegmentationWorker::segmentationError,
+                     reportError);
+    QObject::connect(worker, &SegmentationWorker::maskReady, vp,
+                     &ViewPort::setMask, Qt::QueuedConnection);
+  };
+
+  const auto ensurePersonWorkerLoaded = [&]() -> bool {
+    if (segWorker != nullptr) {
+      return personModeAvailable;
+    }
+
+    const int nfftThreads = std::max(1, activeSettings.nthreads - 3);
+    SegmentationWorker *newSegWorker =
+        new SegmentationWorker(activeSettings.modelPath, activeSettings.modelSize,
+                               nfftThreads, activeSettings.temporalSmooth,
+                               activeSettings.lowerRes);
+    if (!newSegWorker->isModelLoaded()) {
+      reportError("Failed to load segmentation model from " +
+                  activeSettings.modelPath);
+      delete newSegWorker;
+      return false;
+    }
+
+    newSegWorker->moveToThread(maskThread);
+    attachPersonWorker(newSegWorker);
+    segWorker = newSegWorker;
+    personModeAvailable = true;
+
+    QMetaObject::invokeMethod(segWorker,
+                              [worker = segWorker]() { worker->setEnabled(false); },
+                              Qt::QueuedConnection);
+    emit backgrounds->backgroundChanged(backgrounds->current());
+    return true;
+  };
+
   const auto startPipeline = [&](const AppSettings &settings,
                                  const SessionSelections &selections,
                                  bool isReconfigure = false) -> bool {
@@ -329,17 +378,21 @@ int main(int argc, char **argv) {
       return false;
     }
 
-    SegmentationWorker *newSegWorker =
-        new SegmentationWorker(settings.modelPath, settings.modelSize,
-                               nfftThreads, settings.temporalSmooth,
-                               settings.lowerRes);
-    const bool newPersonModeAvailable = newSegWorker->isModelLoaded();
-    if (!newPersonModeAvailable && settings.maskMode == "person") {
-      reportError("Failed to load segmentation model from " +
-                  settings.modelPath);
-      delete newSegWorker;
-      delete newCamFeed;
-      return false;
+    SegmentationWorker *newSegWorker = nullptr;
+    bool newPersonModeAvailable = false;
+    if (settings.maskMode == "person") {
+      newSegWorker = new SegmentationWorker(settings.modelPath,
+                                            settings.modelSize, nfftThreads,
+                                            settings.temporalSmooth,
+                                            settings.lowerRes);
+      newPersonModeAvailable = newSegWorker->isModelLoaded();
+      if (!newPersonModeAvailable) {
+        reportError("Failed to load segmentation model from " +
+                    settings.modelPath);
+        delete newSegWorker;
+        delete newCamFeed;
+        return false;
+      }
     }
 
     // Colour mode is always started without an automatic picker.  The user
@@ -389,7 +442,9 @@ int main(int argc, char **argv) {
       }
     }
 
-    newSegWorker->moveToThread(newMaskThread);
+    if (newSegWorker != nullptr) {
+      newSegWorker->moveToThread(newMaskThread);
+    }
     newColorWorker->moveToThread(newMaskThread);
     newLensWorker->moveToThread(newLensThread);
     newCamFeed->moveToThread(newCamThread);
@@ -399,25 +454,33 @@ int main(int argc, char **argv) {
 
     connectCommonSignals(newCamFeed, newLensWorker, vp, backgrounds);
 
-    QObject::connect(newSegWorker, &SegmentationWorker::maskReady,
-                     newLensWorker, &LensingWorker::onMask,
-                     Qt::QueuedConnection);
-    QObject::connect(backgrounds, &Backgrounds::backgroundChanged, newSegWorker,
-                     &SegmentationWorker::onBackgroundChange,
-                     Qt::QueuedConnection);
-    QObject::connect(newSegWorker, &SegmentationWorker::segmentationError,
-                     reportError);
+    if (newSegWorker != nullptr) {
+      QObject::connect(newSegWorker, &SegmentationWorker::maskReady,
+                       newLensWorker, [newLensWorker](const cv::Mat &mask) {
+                         newLensWorker->submitMask(mask);
+                       },
+                       Qt::DirectConnection);
+      QObject::connect(backgrounds, &Backgrounds::backgroundChanged,
+                       newSegWorker, &SegmentationWorker::onBackgroundChange,
+                       Qt::QueuedConnection);
+      QObject::connect(newSegWorker, &SegmentationWorker::segmentationError,
+                       reportError);
+    }
 
     QObject::connect(newColorWorker, &ColorMaskWorker::maskReady,
-                     newLensWorker, &LensingWorker::onMask,
-                     Qt::QueuedConnection);
+                     newLensWorker, [newLensWorker](const cv::Mat &mask) {
+                       newLensWorker->submitMask(mask);
+                     },
+                     Qt::DirectConnection);
     QObject::connect(backgrounds, &Backgrounds::backgroundChanged,
                      newColorWorker, &ColorMaskWorker::onBackgroundChange,
                      Qt::QueuedConnection);
     QObject::connect(newColorWorker, &ColorMaskWorker::maskReady, vp,
                      &ViewPort::setMask, Qt::QueuedConnection);
-    QObject::connect(newSegWorker, &SegmentationWorker::maskReady, vp,
-                     &ViewPort::setMask, Qt::QueuedConnection);
+    if (newSegWorker != nullptr) {
+      QObject::connect(newSegWorker, &SegmentationWorker::maskReady, vp,
+                       &ViewPort::setMask, Qt::QueuedConnection);
+    }
     QObject::connect(newColorWorker, &ColorMaskWorker::maskError, reportError);
 
     QObject::connect(newColorWorker,
@@ -490,8 +553,11 @@ int main(int argc, char **argv) {
 
     setActiveMaskMode = [&](ActiveMaskMode mode) {
       activeMaskMode = mode;
-      const bool enablePerson =
-          mode == ActiveMaskMode::Person && personModeAvailable;
+      if (mode == ActiveMaskMode::Person && !ensurePersonWorkerLoaded()) {
+        return;
+      }
+
+      const bool enablePerson = mode == ActiveMaskMode::Person;
       const bool enableColor = mode == ActiveMaskMode::Color;
 
       if (frameToSegConnection)
@@ -499,23 +565,30 @@ int main(int argc, char **argv) {
       if (frameToColorConnection)
         QObject::disconnect(frameToColorConnection);
 
-      if (enablePerson) {
+      if (enablePerson && segWorker != nullptr) {
         frameToSegConnection = QObject::connect(
             camFeed, &CameraFeed::frameCaptured, segWorker,
-            &SegmentationWorker::onFrame, Qt::QueuedConnection);
+            [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
+            Qt::DirectConnection);
       }
       if (enableColor) {
         frameToColorConnection = QObject::connect(
             camFeed, &CameraFeed::frameCaptured, colorWorker,
-            &ColorMaskWorker::onFrame, Qt::QueuedConnection);
+            [colorWorker](const cv::Mat &frame) {
+              colorWorker->submitFrame(frame);
+            },
+            Qt::DirectConnection);
       }
 
-      QMetaObject::invokeMethod(
-          segWorker,
-          [segWorker, enablePerson]() {
-            if (segWorker) segWorker->setEnabled(enablePerson);
-          },
-          Qt::QueuedConnection);
+      if (segWorker != nullptr) {
+        QMetaObject::invokeMethod(
+            segWorker,
+            [segWorker, enablePerson]() {
+              if (segWorker)
+                segWorker->setEnabled(enablePerson);
+            },
+            Qt::QueuedConnection);
+      }
       QMetaObject::invokeMethod(
           colorWorker,
           [colorWorker, enableColor]() {

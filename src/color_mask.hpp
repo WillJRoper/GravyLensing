@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,9 @@ public:
 
   /// Whether initialization completed successfully.
   bool isReady() const { return ready_; }
+
+  /// Thread-safe frame submission that coalesces stale work.
+  void submitFrame(const cv::Mat &frame);
 
   /// Whether this worker should process incoming frames.
   bool isEnabled() const { return enabled_; }
@@ -148,6 +152,7 @@ private:
   void buildSelectedMask(int label);
   bool reacquisitionMode() const;
   void setError(const std::string &error);
+  void drainPendingFrame();
 
   // Output scaling matches the lower-resolution lensing path.
   float lowerRes_;
@@ -187,6 +192,12 @@ private:
   bool trackedBlobMode_ = false;
   int frameCount_ = 0;
   std::string lastError_;
+
+  // Coalesced frame delivery: keep only the most recent frame while work is
+  // in flight so the tracker stays responsive under load.
+  std::mutex pendingFrameMutex_;
+  cv::Mat pendingFrame_;
+  bool pendingFrameDrainScheduled_ = false;
 
   // Tracking defaults. These are deliberately conservative to prefer stability.
   static constexpr int kPatchRadius_ = 20;

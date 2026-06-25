@@ -43,7 +43,16 @@ Buffers *createBuffers(const unsigned long *lengths, int bufferCount);
 /// Dispatch using pre-allocated buffers.  dataPtrs point to the CPU memory
 /// to upload (for inputs) and receive results (for outputs).
 void dispatchWithBuffers(Pipeline *p, int gridWidth, Buffers *bufs,
-                         const void **dataPtrs, int bufferCount);
+                          const void **dataPtrs, int bufferCount);
+
+/// Dispatch using pre-allocated buffers with explicit upload/download control
+/// per buffer. If uploadMask/downloadMask is null, that direction is assumed
+/// for every buffer.
+void dispatchWithBuffersSelective(Pipeline *p, int gridWidth, Buffers *bufs,
+                                  const void **dataPtrs,
+                                  const bool *uploadMask,
+                                  const bool *downloadMask,
+                                  int bufferCount);
 
 /// Destroy a pipeline handle.
 void releasePipeline(Pipeline *p);
