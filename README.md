@@ -115,7 +115,7 @@ Profiling is disabled by default and has zero runtime overhead when off.
 
 ## Generating Segmentation models
 
-Before running GravyLensing you will need some segmentation models to detect people in the frame. Included in the `models/` directory is a performance optimised model using the LRASPP model that can be used out the box.
+Before running GravyLensing you will need some segmentation models to detect people in the frame. The repository already includes a working default model at `models/lraspp_torchscript-traced_float32_512_512.pt`, which is what the app now uses for fresh installs.
 
 However, we also provide a unified Python script, `get_models.py` (in the `models/` directory), to generate TorchScript for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
 
@@ -176,7 +176,7 @@ python get_models.py \
 
 ### Quick start
 
-Launch the app; the session setup dialog opens. Configure your pipeline and click `Start Session`.
+Launch the app; the session setup dialog opens. Pick the mask source first, adjust the enabled section for that mode, then click `Start Session`.
 
 ```bash
 ./gravy_lens
@@ -184,7 +184,7 @@ Launch the app; the session setup dialog opens. Configure your pipeline and clic
 
 ### CLI arguments
 
-CLI arguments seed the session setup dialog with initial values. All flags are optional — any omitted value uses the last saved session setting.
+CLI arguments seed the session setup dialog with initial values. All flags are optional; any omitted value uses the last saved session setting. For persisted booleans you can now force either state explicitly with `--flag` or `--no-flag`.
 
 ```
 Usage: ./gravy_lens [options]
@@ -202,8 +202,12 @@ Options:
   --lr, --lowerRes <f>          Resolution scale for lensing (default 1.0).
   --sb, --secondsPerBackground <n>  Seconds per background; -1 = manual (default -1).
   --di, --distortInside          Distort inside the mask as well.
+  --no-distortInside             Force interior distortion off.
   --flip                         Mirror camera feed horizontally.
+  --no-flip                      Force camera mirroring off.
   --roi, --selectROI            Open ROI selector on first session start.
+  --no-selectROI                 Skip the startup ROI selector.
+  --no-debugGrid                 Force the debug grid off.
 ```
 
 ### Example session
@@ -215,6 +219,13 @@ A tuned setup for running on a laptop:
 ```
 
 Choose `Person` mode in the session setup dialog and click `Start Session`.
+
+### Settings panel notes
+
+- The dialog is scrollable and works on smaller laptop displays.
+- `Person Detection` settings are enabled only when `Person (AI segmentation)` is selected.
+- `Color Detection` settings are enabled only when `Color tracking` is selected.
+- Picking a colour from the dialog swatch or from the live camera now persists correctly across session restarts.
 
 ### Mask modes
 
@@ -260,6 +271,8 @@ The current colour target and ROI are preserved across the restart where possibl
 
 Color mode works best when the tracked object is strongly coloured, the background does not contain similar colours, and the lighting stays fairly stable. You do not need a segmentation model when running in colour mode.
 
+When you pick a colour from the live camera, the app now carries the measured HSV spread forward as the starting tolerance range instead of dropping back to the fixed defaults immediately.
+
 ## Python Example
 
 A simple self-contained Python demo is provided in `python_example.py`. This example implements some of the functionality of the C++ but with all the performance baggage you'd expect from Python. To run:
@@ -272,7 +285,7 @@ python python_example.py
 This script:
 
 1. Captures your webcam (`cv2.VideoCapture(0)`).
-2. Loads a background TIFF (update the `bg_path` variable).
+2. Loads a background image from `backgrounds/` by default.
 3. Uses the same DeepLabV3 model for segmentation.
 4. Applies half-resolution FFT lensing and displays the result.
 

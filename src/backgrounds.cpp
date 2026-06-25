@@ -90,6 +90,12 @@ bool Backgrounds::load() {
   // sort so numbering is stable
   std::sort(paths_.begin(), paths_.end());
 
+  if (paths_.size() > 10) {
+    std::cerr << "Warning: More than 10 images found, only the first 10 are "
+                 "accessible.\n";
+    paths_.resize(10);
+  }
+
   // load into memory
   images_.reserve(paths_.size());
   for (auto const &p : paths_) {
@@ -97,14 +103,6 @@ bool Backgrounds::load() {
     if (loadImage(p, img)) {
       images_.push_back(std::move(img));
     }
-  }
-
-  // Raise an error if there are more than 10 images
-  if (images_.size() > 10) {
-    std::cerr << "Warning: More than 10 images loaded, only the first 10 are "
-                 "accessible."
-              << std::endl;
-    images_.resize(10);
   }
 
   return !images_.empty();

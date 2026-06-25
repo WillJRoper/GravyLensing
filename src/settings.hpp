@@ -58,7 +58,7 @@ struct AppSettings {
   int colorValTol = 80;     // ± tolerance around target value (0-255)
 
   // ── Person detection ───────────────────────────────────────────────
-  std::string modelPath = "models/deeplab_quantized_model.pt";
+  std::string modelPath = "models/lraspp_torchscript-traced_float32_512_512.pt";
   int modelSize = 512;          // Segmentation model input size (px)
   float temporalSmooth = 0.25f; // Frame blending factor (0–1)
 

@@ -569,12 +569,9 @@ void ColorMaskWorker::applyReselectionTarget(float hue, float sat, float val,
   targetHue_ = hue;
   targetSat_ = sat;
   targetVal_ = val;
-  (void)hueTol;
-  (void)satTol;
-  (void)valTol;
-  adaptiveHueTol_ = kBaseHueTolerance_;
-  adaptiveSatTol_ = kSatTolerance_;
-  adaptiveValTol_ = kValTolerance_;
+  adaptiveHueTol_ = std::max(1, hueTol);
+  adaptiveSatTol_ = std::max(1, satTol);
+  adaptiveValTol_ = std::max(1, valTol);
   ready_ = true;
   haveTrack_ = false;
   lostFrames_ = 0;

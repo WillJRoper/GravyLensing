@@ -27,9 +27,11 @@
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QScrollArea>
 #include <QSizePolicy>
 #include <QVBoxLayout>
 
@@ -77,15 +79,35 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     : QDialog(parent) {
 
   setWindowTitle(windowTitle);
-  setMinimumWidth(1050);
+  setMinimumWidth(760);
+  resize(920, 720);
   setSizeGripEnabled(true);
 
   auto *mainLayout = new QVBoxLayout(this);
   mainLayout->setContentsMargins(20, 20, 20, 14);
+  mainLayout->setSpacing(12);
+
+  auto *scrollArea = new QScrollArea(this);
+  scrollArea->setWidgetResizable(true);
+  scrollArea->setFrameShape(QFrame::NoFrame);
+  mainLayout->addWidget(scrollArea, 1);
+
+  auto *content = new QWidget(scrollArea);
+  scrollArea->setWidget(content);
+
+  auto *contentLayout = new QVBoxLayout(content);
+  contentLayout->setContentsMargins(0, 0, 0, 0);
+  contentLayout->setSpacing(12);
+
+  auto *summary = new QLabel(
+      "Choose the mask source first, then tune the relevant settings below. "
+      "Changes apply when you start or restart the session.");
+  summary->setWordWrap(true);
+  contentLayout->addWidget(summary);
 
   auto *columns = new QHBoxLayout;
   columns->setSpacing(24);
-  mainLayout->addLayout(columns);
+  contentLayout->addLayout(columns);
 
   auto *leftColumn = new QVBoxLayout;
   auto *rightColumn = new QVBoxLayout;
@@ -395,6 +417,18 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   rightColumn->addWidget(note);
   rightColumn->addStretch(1);
 
+  const auto syncModeGroups = [=]() {
+    const bool colorMode =
+        maskModeCombo_->currentData().toString() == QLatin1String("color");
+    personGroup->setEnabled(!colorMode);
+    colorGroup->setEnabled(colorMode);
+    personGroup->setFlat(colorMode);
+    colorGroup->setFlat(!colorMode);
+  };
+  connect(maskModeCombo_, &QComboBox::currentIndexChanged, this,
+          [=](int) { syncModeGroups(); });
+  syncModeGroups();
+
   // ── Button box ──────────────────────────────────────────────────────
   auto *buttons = new QDialogButtonBox(
       QDialogButtonBox::RestoreDefaults | QDialogButtonBox::Ok |
@@ -403,7 +437,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   mainLayout->addWidget(buttons);
 
   connect(buttons->button(QDialogButtonBox::RestoreDefaults),
-          &QPushButton::clicked, this, [this]() {
+          &QPushButton::clicked, this, [this, syncModeGroups]() {
             const AppSettings defaults;
             deviceIndexSpin_->setValue(defaults.deviceIndex);
             flipCheck_->setChecked(defaults.flip);
@@ -440,12 +474,13 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             roiX_ = roiY_ = roiW_ = roiH_ = 0;
             roiInfoLabel_->setText("No region selected — full frame in use.");
             colorPickRequested_ = false;
-            pickedHue_ = pickedSat_ = pickedVal_ = 0;
-            updateSwatchDisplay(false);
-            debugGridCheck_->setChecked(defaults.debugGrid);
-            modelPathEdit_->setCursorPosition(
-                modelPathEdit_->text().size());
-          });
+             pickedHue_ = pickedSat_ = pickedVal_ = 0;
+             updateSwatchDisplay(false);
+             debugGridCheck_->setChecked(defaults.debugGrid);
+             modelPathEdit_->setCursorPosition(
+                 modelPathEdit_->text().size());
+             syncModeGroups();
+           });
 
   connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);

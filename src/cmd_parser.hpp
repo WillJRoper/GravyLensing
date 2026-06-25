@@ -107,6 +107,10 @@ public:
         QStringList() << "g" << "debugGrid",
         "Show a debugging grid with the camera feed, mask, and lensed image.");
     parser.addOption(debugGridOption);
+    QCommandLineOption noDebugGridOption(
+        QStringList() << "no-debugGrid",
+        "Force the debugging grid off for this session.");
+    parser.addOption(noDebugGridOption);
 
     // --pad-factor <int> (default 2)
     QCommandLineOption padFactorOption(
@@ -150,11 +154,18 @@ public:
     QCommandLineOption distortInsideOption(
         QStringList() << "di" << "distortInside", "Distort inside the mask?");
     parser.addOption(distortInsideOption);
+    QCommandLineOption noDistortInsideOption(
+        QStringList() << "no-distortInside",
+        "Force interior distortion off for this session.");
+    parser.addOption(noDistortInsideOption);
 
     // flip <bool> (flag only; no argument)
     QCommandLineOption flipOption(QStringList() << "flip",
                                   "Flip the camera feed horizontally?");
     parser.addOption(flipOption);
+    QCommandLineOption noFlipOption(QStringList() << "no-flip",
+                                    "Force camera mirroring off for this session.");
+    parser.addOption(noFlipOption);
 
     // selectROI <bool> (flag only; no argument)
     QCommandLineOption selectROIOption(
@@ -162,11 +173,34 @@ public:
         "Select a region of interest (ROI) in the camera feed to apply the "
         "lensing effect. If not set, the full frame is used.");
     parser.addOption(selectROIOption);
+    QCommandLineOption noSelectROIOption(
+        QStringList() << "no-selectROI",
+        "Skip the startup ROI selector for this session.");
+    parser.addOption(noSelectROIOption);
 
     parser.process(app);
 
     bool ok;
     CommandLineOptions opts{};
+    const auto resolveBool = [&](bool defaultValue,
+                                 const QCommandLineOption &enableOption,
+                                 const QCommandLineOption &disableOption,
+                                 const char *name) {
+      const bool enable = parser.isSet(enableOption);
+      const bool disable = parser.isSet(disableOption);
+      if (enable && disable) {
+        std::cerr << "Error: --" << name << " and --"
+                  << disableOption.names().constFirst().toStdString()
+                  << " cannot be used together.\n";
+        std::exit(-1);
+      }
+      if (enable)
+        return true;
+      if (disable)
+        return false;
+      return defaultValue;
+    };
+
     opts.nthreads = parser.value(nthreadsOption).toInt(&ok);
     if (!ok || opts.nthreads < 2) {
       std::cerr << "Error: --nthreads must be an integer >= 2.\n";
@@ -197,7 +231,8 @@ public:
       std::exit(-1);
     }
 
-    opts.debugGrid = defaults.debugGrid || parser.isSet(debugGridOption);
+    opts.debugGrid = resolveBool(defaults.debugGrid, debugGridOption,
+                                 noDebugGridOption, "debugGrid");
 
     opts.padFactor = parser.value(padFactorOption).toInt(&ok);
     if (!ok) {
@@ -230,9 +265,13 @@ public:
       std::exit(-1);
     }
 
-    opts.distortInside = defaults.distortInside || parser.isSet(distortInsideOption);
-    opts.flip = defaults.flip || parser.isSet(flipOption);
-    opts.selectROI = defaults.selectROI || parser.isSet(selectROIOption);
+    opts.distortInside = resolveBool(defaults.distortInside,
+                                     distortInsideOption,
+                                     noDistortInsideOption,
+                                     "distortInside");
+    opts.flip = resolveBool(defaults.flip, flipOption, noFlipOption, "flip");
+    opts.selectROI = resolveBool(defaults.selectROI, selectROIOption,
+                                 noSelectROIOption, "selectROI");
     opts.maskMode = defaults.maskMode;
     opts.colorModeType = defaults.colorModeType;
 

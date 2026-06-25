@@ -237,6 +237,8 @@ int main(int argc, char **argv) {
   QThread *maskThread = nullptr;
   QThread *lensThread = nullptr;
   QTimer *bgTimer = nullptr;
+  QMetaObject::Connection frameToSegConnection;
+  QMetaObject::Connection frameToColorConnection;
   bool personModeAvailable = false;
   ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
   std::function<void(ActiveMaskMode)> setActiveMaskMode;
@@ -306,6 +308,8 @@ int main(int argc, char **argv) {
     lensThread = nullptr;
     camThread = nullptr;
     personModeAvailable = false;
+    frameToSegConnection = QMetaObject::Connection();
+    frameToColorConnection = QMetaObject::Connection();
   };
 
   const auto startPipeline = [&](const AppSettings &settings,
@@ -395,8 +399,6 @@ int main(int argc, char **argv) {
 
     connectCommonSignals(newCamFeed, newLensWorker, vp, backgrounds);
 
-    QObject::connect(newCamFeed, &CameraFeed::frameCaptured, newSegWorker,
-                     &SegmentationWorker::onFrame, Qt::QueuedConnection);
     QObject::connect(newSegWorker, &SegmentationWorker::maskReady,
                      newLensWorker, &LensingWorker::onMask,
                      Qt::QueuedConnection);
@@ -406,8 +408,6 @@ int main(int argc, char **argv) {
     QObject::connect(newSegWorker, &SegmentationWorker::segmentationError,
                      reportError);
 
-    QObject::connect(newCamFeed, &CameraFeed::frameCaptured, newColorWorker,
-                     &ColorMaskWorker::onFrame, Qt::QueuedConnection);
     QObject::connect(newColorWorker, &ColorMaskWorker::maskReady,
                      newLensWorker, &LensingWorker::onMask,
                      Qt::QueuedConnection);
@@ -444,17 +444,21 @@ int main(int argc, char **argv) {
                              Q_ARG(int, valTol),
                              Q_ARG(bool, success));
 
-                         if (success) {
-                           sessionSelections.hasColorTarget = true;
-                           sessionSelections.hue = stats.hue;
-                           sessionSelections.sat = stats.sat;
-                           sessionSelections.val = stats.val;
-                           sessionSelections.hueTol = hueTol;
-                           sessionSelections.satTol = satTol;
-                           sessionSelections.valTol = valTol;
-                           QSettings s;
-                           activeSettings.save(s);
-                           saveSessionSelections(s);
+                          if (success) {
+                            sessionSelections.hasColorTarget = true;
+                            sessionSelections.hue = stats.hue;
+                            sessionSelections.sat = stats.sat;
+                            sessionSelections.val = stats.val;
+                            sessionSelections.hueTol = hueTol;
+                            sessionSelections.satTol = satTol;
+                            sessionSelections.valTol = valTol;
+                            activeSettings.colorHueTol = hueTol;
+                            activeSettings.colorSatTol = satTol;
+                            activeSettings.colorValTol = valTol;
+                            vp->setSettings(activeSettings);
+                            QSettings s;
+                            activeSettings.save(s);
+                            saveSessionSelections(s);
                          }
                        },
                      Qt::QueuedConnection);
@@ -489,6 +493,22 @@ int main(int argc, char **argv) {
       const bool enablePerson =
           mode == ActiveMaskMode::Person && personModeAvailable;
       const bool enableColor = mode == ActiveMaskMode::Color;
+
+      if (frameToSegConnection)
+        QObject::disconnect(frameToSegConnection);
+      if (frameToColorConnection)
+        QObject::disconnect(frameToColorConnection);
+
+      if (enablePerson) {
+        frameToSegConnection = QObject::connect(
+            camFeed, &CameraFeed::frameCaptured, segWorker,
+            &SegmentationWorker::onFrame, Qt::QueuedConnection);
+      }
+      if (enableColor) {
+        frameToColorConnection = QObject::connect(
+            camFeed, &CameraFeed::frameCaptured, colorWorker,
+            &ColorMaskWorker::onFrame, Qt::QueuedConnection);
+      }
 
       QMetaObject::invokeMethod(
           segWorker,
@@ -657,12 +677,27 @@ int main(int argc, char **argv) {
                       const AppSettings previousSettings = activeSettings;
                       const SessionSelections previousSelections =
                           sessionSelections;
-                      const bool actuallySwitchedToColor =
-                          previousSettings.maskMode != "color" &&
-                          newSettings.maskMode == "color";
+                       const bool actuallySwitchedToColor =
+                           previousSettings.maskMode != "color" &&
+                           newSettings.maskMode == "color";
 
-                      // sessionSelections is already up-to-date from the
-                      // live handlers (reselection lambda, ROI handler).
+                       if (vp->hasColorTarget()) {
+                         sessionSelections.hasColorTarget = true;
+                         sessionSelections.hue = vp->targetHue();
+                         sessionSelections.sat = vp->targetSat();
+                         sessionSelections.val = vp->targetVal();
+                         sessionSelections.hueTol = newSettings.colorHueTol;
+                         sessionSelections.satTol = newSettings.colorSatTol;
+                         sessionSelections.valTol = newSettings.colorValTol;
+                       } else {
+                         sessionSelections.hasColorTarget = false;
+                         sessionSelections.hue = 0.0f;
+                         sessionSelections.sat = 0.0f;
+                         sessionSelections.val = 0.0f;
+                       }
+
+                       // sessionSelections is already up-to-date from the
+                       // live handlers (reselection lambda, ROI handler).
                       // No need to BlockingQueuedConnection-query workers.
 
                       stopPipeline();
