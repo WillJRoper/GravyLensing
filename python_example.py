@@ -3,6 +3,7 @@
 
 import cv2
 import numpy as np
+from pathlib import Path
 import torch
 import torchvision.transforms as T
 from torchvision.models.segmentation import (
@@ -157,8 +158,14 @@ if __name__ == "__main__":
     scale = 0.5  # downscale factor for lensing
 
     cap = cv2.VideoCapture(0)
-    bg_path = "/Users/willroper/Downloads/Euclid_s_extragalactic_view_in_Southern_Sky_patch.tif"
-    bg_full = cv2.imread(bg_path)
+    backgrounds_dir = Path(__file__).resolve().parent / "backgrounds"
+    bg_candidates = sorted(backgrounds_dir.glob("*"))
+    bg_path = next((p for p in bg_candidates if p.suffix.lower() in {
+        ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif", ".webp"
+    }), None)
+    if bg_path is None:
+        raise FileNotFoundError("No background image found in ./backgrounds")
+    bg_full = cv2.imread(str(bg_path))
     ret, frame = cap.read()
     h_f, w_f = frame.shape[:2]
     bg_full = cv2.resize(bg_full, (w_f, h_f), interpolation=cv2.INTER_AREA)

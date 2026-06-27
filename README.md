@@ -1,41 +1,54 @@
 # GravyLensing
 
-A real-time gravitational lensing demo application written in C++ and supported by the Goodwood Festival Of Speed Future Lab.
-
-Here is an example of the debug mode showing the mask overlaying me awkwardly sat at my desk along with the lensed and unlensed background.
+A real-time gravitational lensing demo written in C++, supported by the Goodwood
+Festival Of Speed Future Lab.
 
 ![SCR-20250429-qemj](https://github.com/user-attachments/assets/39f96883-53b8-4d13-b399-3d390bf4328f)
 
 ## Features
 
-- **Live camera input**: Captures webcam feed and segments the person in real time.
-- **Gravitational lens effect**: Applies FFT-based deflection to background images based on person mask.
-- **Multi-threaded**: Uses OpenMP and FFTW3 threaded plans for high performance.
-- **Qt6 GUI**: Displays the lensed output using Qt6 (with an optional debugging view).
-- **Segmentation model**: Uses a TorchScript-exported models for person mask extraction.
-- **Background cycling**: Load up to 10 images from `backgrounds/` and switch via key presses.
-
-## TODO:
-
-- Optimise segementation step to remove bottleneck and smooth out small scale variations.
-- Enable turning on and off of "lens" feed (i.e. the person) in output video feed.
-- Utilise GPUs when available.
-- Scalable lensing strength.
+- **Live camera input**: Captures webcam feed in real time (native AVFoundation on
+  macOS, OpenCV `VideoCapture` on Linux).
+- **Metal GPU acceleration** (macOS only): Offloads colour-key thresholding and
+  lens-map construction to the GPU.
+- **Fixed Color Key mode**: Chroma-key style HSV masking against a user-selected
+  target colour.
+- **Tracked Color Blob mode** (advanced): Connected-component blob tracking for
+  selective single-object masking.
+- **Person segmentation mode**: Uses TorchScript models (LR-ASPP or DeepLabV3)
+  with MPS/GPU inference for person detection.
+- **FFT-based lensing**: Applies gravitational deflection to background images
+  based on the generated mask.
+- **Multi-threaded**: OpenMP and threaded FFTW3 plans keep all pipeline stages
+  concurrent.
+- **Qt6 GUI**: Lensed output with an optional 2×2 diagnostic grid.
+- **Background cycling**: Loads up to 10 images from `backgrounds/`; switch with
+  `0`–`9` keys, a menu, or auto-cycle.
+- **Session-driven settings**: All configuration is persisted through an
+  explicit startup dialog. Live mode and debug-grid toggles survive restarts.
+- **Coalescing frame delivery**: Workers accept only the most recently arrived
+  frame, avoiding backlog buildup under load.
 
 ## Prerequisites
 
 - **CMake** ≥ 3.10
-- **C++ compiler** with OpenMP support (e.g., GCC, Clang)
-- **FFTW3** (single precision + threads)
-- **OpenCV**
-- **Qt6** (Widgets)
-- **libtorch** (PyTorch C++ API)
-- **Threads** (C++ std threads)
-- **Python 3.8+** (for the example script and model generation)
+- **C++17 compiler** with OpenMP support
+- **FFTW3** — single-precision library + threaded wrapper (`fftw3f`,
+  `fftw3f_threads`)
+- **OpenCV** ≥ 4
+- **Qt6** — `Core`, `Gui`, `Widgets`
+- **libtorch** — PyTorch C++ API (≥ 2.0)
+- **Python 3.8+** — only for the optional model-generation script and the
+  standalone Python example
+
+macOS additionally links these system frameworks (no manual install needed):
+
+- AVFoundation, CoreMedia, CoreVideo — camera capture
+- Metal, MetalPerformanceShaders, Foundation — GPU acceleration
 
 ## Installation
 
-### Clone the repository
+### Clone
 
 ```bash
 git clone https://github.com/WillJRoper/gravy-lensing.git
@@ -44,200 +57,190 @@ cd gravy-lensing
 
 ### Dependencies
 
-Install via your package manager (assuming you need everything):
+#### macOS (Homebrew)
+
+```bash
+brew install cmake fftw libomp opencv qt
+```
+
+`libomp` is required because AppleClang does not ship OpenMP by default.
 
 #### Linux (Ubuntu/Debian)
 
-- Install via:
-  ```bash
-  sudo apt update
-  sudo apt install cmake build-essential libfftw3-dev libfftw3-single3 libopencv-dev qt6-base-dev python3 python3-venv python3-pip
-  ```
+```bash
+sudo apt update
+sudo apt install cmake build-essential libfftw3-dev libfftw3-single3 \
+  libopencv-dev qt6-base-dev python3 python3-venv python3-pip
+```
 
-#### macOS (Homebrew)
+#### libtorch
 
-- Install via:
+Download libtorch from [pytorch.org](https://pytorch.org/). Pass its path as
+`CMAKE_PREFIX_PATH` during configuration.
 
-  ```bash
-  brew update
-  brew install cmake fftw opencv qt python@3.9
-  ```
-
-  If FFTW3 is installed in non-standard locations, you will need to set `FFTW3_ROOT` during configuration.
-
-#### Installing libtorch
-
-For libtorch, see their [installation instructions](https://pytorch.org/). You will need to pass the location of libtorch at configuration time (as shown next).
-
-## Build with CMake
-
-To build the release build:
+## Build
 
 ```bash
 cmake -B build \
-  -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
+  -DCMAKE_PREFIX_PATH="/path/to/libtorch" \
   -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release -- -j$(nproc)
+cmake --build build --config Release
 ```
 
-Note that you may need to point directly to FFTW if it is installed in a nonstandard location:
+On macOS with Homebrew libtorch:
 
 ```bash
 cmake -B build \
-  -DFFTW3_ROOT=/path/to/fftw3 \
-  -DCMAKE_PREFIX_PATH=/path/to/libtorch/ \
+  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qtbase;/opt/homebrew/opt/libomp;/path/to/libtorch" \
   -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release -- -j$(nproc)
+cmake --build build --config Release
 ```
 
-The executable `gravy_lens` will then be placed in the project root.
+If FFTW3 is installed in a non-standard location, add `-DFFTW3_ROOT=/path/to/fftw3`.
 
-## Generating Segementation models
+The executable `gravy_lens` is placed in the project root.
 
-Before running GravyLensing you will need some segmentation models to detect people in the frame. Included in the `models/` directory is a performance optimised model using LRASPP model that can be used out the box.
+### Build options
 
-However, we also provide a unified Python script, `get_models.py` (in the `models/` directory), to generate TorchScript for the C++ inference pipeline. It currently supports two backbones—DeepLabV3 and LR-ASPP—and four export formats.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-DENABLE_PROFILING=ON` | OFF | Periodic `[Perf]` log lines showing average ms and fps per pipeline stage |
+| `-DBUILD_TESTS=OFF` | ON | Skip building the unit-test binary |
 
-**Install prerequisites**
+## Segmentation models
 
-To run this script you'll need to have some PyTorch packages installed.
+The repository ships a default model at
+`models/lraspp_torchscript-traced_float32_512_512.pt`, which is what the app
+uses for fresh installs in Person mode.
+
+The script `models/get_models.py` can generate additional models:
 
 ```bash
 pip install torch torchvision
+python models/get_models.py --model lraspp --format quantized
 ```
 
-**Usage**
+Supported backbones: `deeplab`, `lraspp`.  
+Supported formats: `torchscript-scripted`, `torchscript-traced`, `quantized`, `onnx`.
 
-```bash
-python get_models.py \
-  --model <deeplab|lraspp> \
-  --format <torchscript-scripted|torchscript-traced|quantized|onnx> \
-  [--device cpu|cuda] [--width W] [--height H]
-```
-
-- `--model`
-  - `deeplab` DeepLabV3 MobileNetV3 Large
-  - `lraspp` LR-ASPP MobileNetV3 Large
-- `--format`
-  - `torchscript-scripted` uses `torch.jit.script(…)`
-  - `torchscript-traced` uses `torch.jit.trace(…)` with a fixed dummy shape
-  - `quantized` dynamic int8 quantization + scripted export (best CPU latency)
-  - `onnx` ONNX opset 14 with dynamic axes (batch, height, width)
-- `--device` (default `cpu`) load the model on CPU or GPU
-- `--width`, `--height` (dummy input spatial size; default `320×320`)
-
-**Output**  
-The script always writes to:
-
-```
-models/<model>_model.<ext>
-```
-
-- `.pt` for TorchScript formats
-- `.onnx` for the ONNX export
-
-**Example**
-
-```bash
-# Generate a quantized LR-ASPP model for fastest CPU inference
-python get_models.py \
-  --model lraspp \
-  --format quantized
-
-# Generate a traced DeepLabV3 model on GPU
-python get_models.py \
-  --model deeplab \
-  --format torchscript-traced \
-  --device cuda
-```
+See `models/README` for the models already included.
 
 ## Usage
 
-```
-Usage: ./gravy_lens [options]
-GravyLensing applies a gravitational lensing effect to images based on people detected in a camera feed.
-
-Options:
-  -h, --help                                         Displays help on
-                                                     commandline options.
-  --help-all                                         Displays help, including
-                                                     generic Qt options.
-  -n, --nthreads <nthreads>                          Number of CPU threads used
-                                                     in the calculation (must be
-                                                     >= 2).
-  -s, --strength <strength>                          Strength factor for the
-                                                     lensing effect (float,
-                                                     default=0.1).
-  -f, --softening <softening>                        Softening radius in pixels
-                                                     applied to the lensing
-                                                     effect (float,
-                                                     default=30.0).
-  -m, --modelSize <modelSize>                        Segmentation model size,
-                                                     bigger means more accurate
-                                                     people but at the expense
-                                                     of frame rate (int,
-                                                     default=512).
-  -d, --deviceIndex <deviceIndex>                    Device index, i.e. which
-                                                     camera to use (int,
-                                                     default=0).
-  -g, --debugGrid                                    Show a debugging grid with
-                                                     the camera feed, mask, and
-                                                     lensed image.
-  -p, --padFactor <padFactor>                        Padding factor for FFT
-                                                     (int, default=2).
-  --mp, --modelPath <modelPath>                      Path to the segmentation
-                                                     model (string).
-  -t, --temporalSmooth <temporalSmooth>              Temporal frame smoothing
-                                                     factor, i.e. how much of
-                                                     previous frames is used to
-                                                     smooth out temporal
-                                                     flucations in the person
-                                                     detection mask (float,
-                                                     default=0.25).
-  --lr, --lowerRes <lowerRes>                        Lower resolution factor
-                                                     for the lensing effect
-                                                     (float, default=1.0).
-  --sb, --secondsPerBackground <secondsPerBackground Seconds per background
-  >                                                  image, if -1 then
-                                                     background images are
-                                                     selected through the 0-9
-                                                     keys (int, default=-1).
-  --di, --distortInside                              Distort inside the mask?
-  --flip                                             Flip the camera feed
-                                                     horizontally?
-  --roi, --selectROI                                 Select a region of
-                                                     interest (ROI) in the
-                                                     camera feed to apply the
-                                                     lensing effect. If not set,
-                                                     the full frame is used.
-```
-
-For example, an efficient set up for running on a laptop with the output on the screen (requiring flipping) would be:
+### Quick start
 
 ```bash
-./gravy_lens --nthreads 12 --modelSize 512 --mp models/lraspp_torchscript-traced_float32_512_512.pt  --softening 50 --strength 4 --lowerRes 0.5 --secondsPerBackground 3 --flip --distortInside
+./gravy_lens
 ```
 
-## Python Example
+The session-setup dialog opens. Pick the mask source, adjust the relevant
+section, then click **Start Session**.
 
-A simple self-contained Python demo is provided in `python_example.py`. This example implements some of the functionality of the C++ but with all the performance baggage you'd expect from Python. To run:
+### CLI arguments
+
+All flags are optional and seed the startup dialog. Omitted values use the last
+saved session setting. Boolean flags accept an explicit `--no-` counterpart.
+
+```
+Usage: ./gravy_lens [options]
+
+Options:
+  -n, --nthreads <n>              CPU threads (must be ≥ 2; default 12).
+  -s, --strength <f>              Lens strength multiplier (default 4.0).
+  -f, --softening <f>             Kernel softening radius in px (default 50.0).
+  -m, --modelSize <n>             Segmentation model input size (default 512).
+  -d, --deviceIndex <n>           Camera device index (default 0).
+  -g, --debugGrid                 Show 2×2 diagnostic grid at start.
+  --no-debugGrid                  Force the debug grid off.
+  -p, --padFactor <n>             FFT padding multiplier (default 2).
+  --mp, --modelPath <path>        TorchScript model path.
+  -t, --temporalSmooth <f>        Mask temporal blending factor (default 0.25).
+  --lr, --lowerRes <f>            Resolution scale for lensing, 0.1–1.0 (default 0.5).
+  --sb, --secondsPerBackground <n> Seconds per background; -1 = manual (default -1).
+  --di, --distortInside           Also lens the interior of the mask (default on).
+  --no-distortInside              Force interior distortion off.
+  --flip                          Mirror camera feed horizontally.
+  --no-flip                       Force mirroring off.
+  --roi, --selectROI              Open ROI selector on first session start.
+  --no-selectROI                  Skip startup ROI selector.
+```
+
+### Example session
+
+```bash
+./gravy_lens
+```
+
+Choose **Person** mode and click **Start Session**.
+
+### Settings panel
+
+- The dialog is scrollable and works on smaller laptop displays.
+- **Person Detection** controls are enabled only when Person mode is selected.
+- **Color Detection** controls are enabled only when Color mode is selected.
+- **Resolution scale** uses a slider alongside the spin box.
+- **Restore Defaults** resets every control to shipped defaults.
+- Colour and ROI selections persist across session restarts.
+
+### Mask modes
+
+**Person (AI segmentation)** — TorchScript model with MPS/GPU acceleration where
+available.
+
+**Color tracking** with two sub-modes:
+
+- **Fixed Color Key** (default): Chroma-key matte from a user-picked HSV range.
+  Fast and stable.
+- **Tracked Color Blob** (advanced): Tracks a single connected-colour region
+  across frames using blob-continuity heuristics.
+
+### Colour target selection
+
+In Color mode:
+
+- Pick or re-pick a target with `Shift+S` or **File > Select Color...**.
+- Click the target object in the OpenCV picker window, or press `Esc`/`c` to
+  cancel.
+- The measured HSV spread is used as the starting tolerance range.
+- Colour mode does not require a segmentation model.
+
+### During a session
+
+| Action | Shortcut | Menu |
+|--------|----------|------|
+| Select / reselect colour | `Shift+S` | File > Select Color... |
+| Select region of interest | `Shift+R` | File > Select Region... |
+| Toggle debug grid | `Shift+D` | View > Debug Grid |
+| Switch mask mode | `Shift+M` | View > Mask Mode |
+| Switch background | `0`–`9` | View > Background |
+| Open session settings | `Cmd+,` | Session > Session Settings... |
+| Quit | `Esc` / `Cmd+Q` | File > Quit |
+
+### Restarting a session
+
+1. Open **Session > Session Settings...**
+2. Edit the configuration.
+3. Click **Restart Session**.
+
+The current colour target and ROI are preserved across restarts where possible.
+
+## Python example
+
+`python_example.py` is a standalone Python demo with the same pipeline, but
+without the performance of the C++ version.
 
 ```bash
 pip install torch torchvision opencv-python numpy
 python python_example.py
 ```
 
-This script:
-
-1. Captures your webcam (`cv2.VideoCapture(0)`).
-2. Loads a background TIFF (update the `bg_path` variable).
-3. Uses the same DeepLabV3 model for segmentation.
-4. Applies half-resolution FFT lensing and displays the result.
+It loads a background from `backgrounds/` automatically.
 
 ## Contributing
 
-Contributions, issues, and feature requests are welcome! Please fork the repository and submit a pull request.
+Contributions, issues, and feature requests are welcome. Fork the repository and
+submit a pull request.
 
 ## License
 
-This project is licensed under the GNU GPL-3.0 License. See [LICENSE](LICENSE) for details.
+GNU GPL-3.0. See [LICENSE](LICENSE) for details.

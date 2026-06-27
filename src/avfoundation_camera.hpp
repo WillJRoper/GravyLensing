@@ -1,0 +1,37 @@
+#pragma once
+
+#ifdef __APPLE__
+
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <string>
+
+#include <opencv2/opencv.hpp>
+
+class AvFoundationCamera {
+public:
+  class Impl;
+
+  explicit AvFoundationCamera(int deviceIndex);
+  ~AvFoundationCamera();
+
+  bool open(std::string &error);
+  void close();
+
+  bool waitForFrame(cv::Mat &frame, int timeoutMs,
+                    const std::atomic<bool> *stopRequested = nullptr);
+  bool latestFrame(cv::Mat &frame) const;
+
+  double width() const;
+  double height() const;
+  double fps() const;
+  const char *backendName() const;
+
+private:
+  std::unique_ptr<Impl> impl_;
+};
+
+#endif

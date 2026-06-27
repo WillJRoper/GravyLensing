@@ -1,1 +1,10 @@
-This is where your torch detection models should be placed.
+Place TorchScript segmentation models here.
+
+Included models:
+
+- `lraspp_torchscript-traced_float32_512_512.pt`: default model used by fresh installs.
+- `lraspp_quantized_float32_512_512.pt`: smaller CPU-oriented alternative.
+- `deeplab_torchscript-traced_float32_512_512.pt`
+- `deeplab_torchscript-scripted_float32_512_512.pt`
+
+The session settings dialog seeds `Model path` from the default LR-ASPP model above.

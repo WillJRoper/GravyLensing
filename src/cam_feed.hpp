@@ -22,13 +22,21 @@
 #pragma once
 
 // Standard includes
+#include <atomic>
+#include <mutex>
 #include <string>
+#include <memory>
+#include <utility>
 
 // Qt includes
 #include <QObject>
 
 // External includes
 #include <opencv2/opencv.hpp>
+
+#ifdef __APPLE__
+class AvFoundationCamera;
+#endif
 
 /**
  * @brief CameraFeed class
@@ -48,8 +56,34 @@ public:
   /// Start continuous capture in this thread
   Q_INVOKABLE void startCaptureLoop();
 
+  /// Request that the capture loop exits.
+  void stopCaptureLoop();
+
+  // Capture a setup frame using the same transforms as runtime output.
+  /// Returns a frame with the same flip/ROI transforms applied as the
+  /// live capture loop.
+  Q_INVOKABLE cv::Mat captureSetupFrame();
+
+  /// Capture a full frame ignoring any active ROI crop — used by region
+  /// selection so the user can draw a new ROI from the unfiltered feed.
+  cv::Mat captureSelectionFrame();
+
+  /// Apply a new ROI rectangle and mask at runtime.
+  Q_INVOKABLE void setROI(cv::Rect rect, cv::Mat mask);
+
   // Is the camera open?
   bool isOpen() const { return isOpen_; }
+
+  /// Query the current ROI state so it can be preserved across restarts.
+  bool hasROI() const { return doingROI_.load(); }
+  cv::Rect roiRect() const {
+    std::lock_guard<std::mutex> lock(roiMutex_);
+    return roiRect_;
+  }
+  cv::Mat roiMask() const {
+    std::lock_guard<std::mutex> lock(roiMutex_);
+    return roiMask_.clone();
+  }
 
 signals:
   /// Emitted as soon as a new frame is ready
@@ -60,6 +94,7 @@ signals:
 
 private:
   bool initCamera(); ///< Called by ctor to open cap_
+  bool readFrame(cv::Mat &frame, bool latestOnly = false);
 
   // The device index for the camera (0 for default camera)
   int deviceIndex_;
@@ -67,16 +102,29 @@ private:
   // OpenCV video capture object
   cv::VideoCapture cap_;
 
-  // ROI selection and mask
+#ifdef __APPLE__
+  std::unique_ptr<AvFoundationCamera> avCamera_;
+#endif
+
+  // ROI selection and mask — protected by roiMutex_ when accessed from
+  // outside the capture thread.
+  mutable std::mutex roiMutex_;
   cv::Rect roiRect_;
   cv::Mat roiMask_;
 
   // Are we flipping the camera feed horizontally?
   bool flip_ = false;
 
-  // Are we doing ROI selection?
-  bool doingROI_ = false;
+  // Are we doing ROI selection? (atomic — read from capture thread,
+  // written from main thread)
+  std::atomic<bool> doingROI_{false};
 
   // Did we open ok?
   bool isOpen_ = false;
+
+  // Cooperative stop flag for the capture loop.
+  std::atomic<bool> stopRequested_{false};
 };
+
+/// Interactive ROI selector (usable from the main thread).
+std::pair<cv::Rect, cv::Mat> selectROIAndMask(cv::Mat &frame, bool flip);

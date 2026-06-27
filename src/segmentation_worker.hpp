@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include <mutex>
+
 // Qt includes
 #include <QDebug>
 #include <QObject>
@@ -57,12 +59,21 @@ public:
   // Check loaded model
   bool isModelLoaded() const { return modelLoaded_; }
 
+  // Thread-safe frame submission that coalesces stale work.
+  void submitFrame(const cv::Mat &frame);
+
+  // Whether this worker should process incoming frames.
+  bool isEnabled() const { return enabled_; }
+
   // ===================== Qt Slots ==================
 
 public Q_SLOTS:
 
   // Calculate a new mask when there is a new frame
   void onFrame(const cv::Mat &frame);
+
+  // Enable or disable mask generation while keeping the worker alive.
+  void setEnabled(bool enabled);
 
   // Update the geometry when the background changes
   void onBackgroundChange(const cv::Mat &background);
@@ -128,6 +139,9 @@ private:
   // Did we load successfully?
   bool modelLoaded_ = false;
 
+  // Whether this worker should process frames.
+  bool enabled_ = false;
+
   // ================== Member Function Prototypes ==================
 
   // Detect the person mask in the current frame using a segmentation model.
@@ -138,6 +152,11 @@ private:
 
   // Update the geometry when the background changes
   void updateGeometry(int width, int height);
+  void drainPendingFrame();
+
+  std::mutex pendingFrameMutex_;
+  cv::Mat pendingFrame_;
+  bool pendingFrameDrainScheduled_ = false;
 };
 
 /**

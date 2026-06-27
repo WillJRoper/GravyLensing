@@ -24,6 +24,7 @@
 #pragma once
 
 // Standard includes
+#include <mutex>
 
 // Qt includes
 #include <QObject>
@@ -50,6 +51,9 @@ public:
   // Destructor
   ~LensingWorker();
 
+  // Thread-safe mask submission that coalesces stale work.
+  void submitMask(const cv::Mat &mask);
+
 public Q_SLOTS:
 
   // Calculate a new lensing effect when there is a new mask
@@ -57,6 +61,12 @@ public Q_SLOTS:
 
   // Update the geometry when the background changes
   void onBackgroundChange(const cv::Mat &background);
+
+  // Change lens strength at runtime (no rebuild required).
+  void setStrength(float strength);
+
+  // Toggle interior distortion at runtime.
+  void setDistortInside(bool distortInside);
 
 signals:
 
@@ -120,6 +130,7 @@ private:
   // Some matrices we can reuse during lens application
   cv::Mat padded_;
   cv::Mat paddedF_;
+  cv::Mat upsampledLensed_;
 
   // Are we distorting inside the mask?
   bool distortInside_;
@@ -146,4 +157,9 @@ private:
 
   // Update the geometry of the lensing effect
   void updateGeometry(int width, int height);
+  void drainPendingMask();
+
+  std::mutex pendingMaskMutex_;
+  cv::Mat pendingMask_;
+  bool pendingMaskDrainScheduled_ = false;
 };

@@ -1,1 +1,5 @@
-This is a folder for holding the background images used in the app.
+Place background images here.
+
+- Supported formats are the image extensions listed in `src/backgrounds.cpp`.
+- The app exposes at most 10 backgrounds through the UI shortcuts `0`-`9`.
+- Images are loaded in sorted filename order.

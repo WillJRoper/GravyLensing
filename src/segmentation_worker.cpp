@@ -26,6 +26,7 @@
 #include <iostream>
 
 // Local includes
+#include "perf_log.hpp"
 #include "segmentation_worker.hpp"
 
 /**
@@ -60,7 +61,7 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
   smallFrame_.create(fastH_, fastW_, CV_8UC3);
   rgbFrame_.create(fastH_, fastW_, CV_8UC3);
   fastMask_.create(fastH_, fastW_, CV_8UC1);
-  prevPersonProb_.create(fastH_, fastW_, CV_8UC1);
+  prevPersonProb_.create(fastH_, fastW_, CV_32F);
   smoothMask_.create(fastH_, fastW_, CV_8UC1);
 
   // Set up the segmentation model
@@ -74,6 +75,57 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
   }
 
   std::cout << "[SegmentationWorker] Loaded model from " << modelPath_ << "\n";
+}
+
+void SegmentationWorker::submitFrame(const cv::Mat &frame) {
+  if (frame.empty()) {
+    return;
+  }
+
+  bool shouldSchedule = false;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    pendingFrame_ = frame;
+    if (!pendingFrameDrainScheduled_) {
+      pendingFrameDrainScheduled_ = true;
+      shouldSchedule = true;
+    }
+  }
+
+  if (shouldSchedule) {
+    QMetaObject::invokeMethod(this, [this]() { drainPendingFrame(); },
+                              Qt::QueuedConnection);
+  }
+}
+
+void SegmentationWorker::drainPendingFrame() {
+  cv::Mat frame;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    if (pendingFrame_.empty()) {
+      pendingFrameDrainScheduled_ = false;
+      return;
+    }
+    frame = std::move(pendingFrame_);
+    pendingFrame_.release();
+  }
+
+  onFrame(frame);
+
+  bool shouldContinue = false;
+  {
+    std::lock_guard<std::mutex> lock(pendingFrameMutex_);
+    if (pendingFrame_.empty()) {
+      pendingFrameDrainScheduled_ = false;
+    } else {
+      shouldContinue = true;
+    }
+  }
+
+  if (shouldContinue) {
+    QMetaObject::invokeMethod(this, [this]() { drainPendingFrame(); },
+                              Qt::QueuedConnection);
+  }
 }
 
 /**
@@ -201,7 +253,7 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
 
   // Convert logits → class map
   torch::Tensor probs = logits.squeeze(0).softmax(0);
-  torch::Tensor personProb_t = probs[dPersonClass_];
+  torch::Tensor personProb_t = probs[kPersonClass_];
 
 #endif
 
@@ -264,25 +316,33 @@ void SegmentationWorker::updateGeometry(int width, int height) {
  * @param frame The new frame from the camera feed.
  */
 void SegmentationWorker::onFrame(const cv::Mat &frame) {
+  static thread_local PerfLog perf("person-mask", 60);
 
-  // Nothing to do until a background has been set
-  if (latestMask_.empty()) {
+  // Nothing to do until a background has been set or this mode is active.
+  if (!enabled_ || !modelLoaded_ || latestMask_.empty()) {
     return;
   }
 
   try {
+    const auto t0 = std::chrono::steady_clock::now();
 
     // Detect the person mask in the current frame
     detectPersonMask(frame);
 
     // Emit the mask ready signal
-    emit maskReady(latestMask_);
+    emit maskReady(latestMask_.clone());
+
+    const auto t1 = std::chrono::steady_clock::now();
+    perf.addSample(
+        std::chrono::duration<double, std::milli>(t1 - t0).count());
 
   } catch (const std::exception &e) {
     emit segmentationError("Segmentation error: " + std::string(e.what()));
     return;
   }
 }
+
+void SegmentationWorker::setEnabled(bool enabled) { enabled_ = enabled; }
 
 /**
  * @brief When the background changes, update the segmentation model.

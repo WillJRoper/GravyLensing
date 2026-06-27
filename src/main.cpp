@@ -21,7 +21,9 @@
  */
 
 // Standard includes
+#include <algorithm>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <string>
 
@@ -29,7 +31,12 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFileInfo>
+#include <QLibraryInfo>
+#include <QMetaObject>
 #include <QMetaType>
+#include <QMessageBox>
+#include <QSettings>
 #include <QThread>
 #include <QTimer>
 
@@ -41,12 +48,12 @@
 #include "backgrounds.hpp"
 #include "cam_feed.hpp"
 #include "cmd_parser.hpp"
+#include "color_mask.hpp"
 #include "lensing_worker.hpp"
 #include "segmentation_worker.hpp"
+#include "settings.hpp"
+#include "settings_dialog.hpp"
 #include "viewport.hpp"
-
-// Define the path to the background images (this is constant)
-const std::string bgDir = "backgrounds/";
 
 // Register cv::Mat as a Qt metatype
 Q_DECLARE_METATYPE(cv::Mat)
@@ -65,186 +72,755 @@ void reportError(const std::string &err) {
 }
 
 /**
- * @brief Connected all the signals and slots.
- *
- * This function connects the signals and slots between the camera feed,
- * segmentation worker, lensing worker, and the viewport.
- *
- * @param camFeed The camera feed object.
- * @param segWorker The segmentation worker object.
- * @param lensWorker The lensing worker object.
- * @param vp The viewport object.
- * @param backgrounds The backgrounds object.
- * @param debugGrid Whether to enable the debug grid.
+ * @brief Connect the parts of the pipeline shared by all mask modes.
  */
-void connectSignals(CameraFeed *camFeed, SegmentationWorker *segWorker,
-                    LensingWorker *lensWorker, ViewPort *vp,
-                    Backgrounds *backgrounds, bool debugGrid) {
+void connectCommonSignals(CameraFeed *camFeed, LensingWorker *lensWorker,
+                          ViewPort *vp, Backgrounds *backgrounds) {
 
-  // First the main steps of the calculation:
-  //      Frame -> Segmentation - > Lensing - > ViewPort
-
-  // Camera → Segmentation (New frame)
-  QObject::connect(camFeed, &CameraFeed::frameCaptured, segWorker,
-                   &SegmentationWorker::onFrame, Qt::QueuedConnection);
-
-  // Segmentation → Lensing (New mask)
-  QObject::connect(segWorker, &SegmentationWorker::maskReady, lensWorker,
-                   &LensingWorker::onMask, Qt::QueuedConnection);
-
-  // ViewPort ← Lensing (New lensed image)
   QObject::connect(lensWorker, &LensingWorker::lensedReady, vp,
                    &ViewPort::setLens, Qt::QueuedConnection);
 
-  // Next connect up and the things that run when the background changes:
-
-  // Backgrounds → Segmentation (New background)
-  QObject::connect(backgrounds, &Backgrounds::backgroundChanged, segWorker,
-                   &SegmentationWorker::onBackgroundChange,
-                   Qt::QueuedConnection);
-
-  // Background switches from UI → LensingWorker
   QObject::connect(backgrounds, &Backgrounds::backgroundChanged, lensWorker,
                    &LensingWorker::onBackgroundChange, Qt::QueuedConnection);
 
-  // Handle the debug grid specific connections for extra displays in the
-  // viewport
-  if (debugGrid) {
+  QObject::connect(camFeed, &CameraFeed::frameCaptured, vp,
+                   &ViewPort::setImage, Qt::QueuedConnection);
+  QObject::connect(backgrounds, &Backgrounds::backgroundChanged, vp,
+                   &ViewPort::setBackground, Qt::QueuedConnection);
 
-    // ViewPort ← Camera (raw display)
-    QObject::connect(camFeed, &CameraFeed::frameCaptured, vp,
-                     &ViewPort::setImage, Qt::QueuedConnection);
-
-    // ViewPort ← Segmentation (mask display, if in debug)
-    QObject::connect(segWorker, &SegmentationWorker::maskReady, vp,
-                     &ViewPort::setMask, Qt::QueuedConnection);
-
-    // Also update the UI display when background changes
-    QObject::connect(backgrounds, &Backgrounds::backgroundChanged, vp,
-                     &ViewPort::setBackground, Qt::QueuedConnection);
-  }
-
-  // Link up error reporting
   QObject::connect(camFeed, &CameraFeed::captureError, reportError);
-  QObject::connect(segWorker, &SegmentationWorker::segmentationError,
-                   reportError);
   QObject::connect(lensWorker, &LensingWorker::lensingError, reportError);
 }
 
 /*
  * @brief Main function for the GravyLensing application.
  *
- * This function initializes the application, parses command-line options,
- * sets up the camera feed, segmentation, and lensing workers, and starts
- * the event loop.
+ * The application follows an explicit session lifecycle:
+ *
+ *   1. Load saved settings from QSettings.
+ *   2. Parse CLI options, which override saved settings.
+ *   3. Present the Session Setup dialog (user confirms configuration).
+ *   4. Build and start the processing pipeline.
+ *   5. Run the Qt event loop.
+ *
+ * Settings can be changed mid-session via Session > Session Settings...,
+ * which tears down the current pipeline and restarts it with the new
+ * configuration.  Live UI changes (mask mode, debug grid) update the
+ * persistent settings immediately so they survive restarts.
+ *
+ * Pipeline stages:
+ *   Capture (cam_feed) -> Mask (seg_worker or color_worker)
+ *                       -> Lensing (lens_worker) -> UI (ViewPort)
  *
  * @param argc The number of command-line arguments.
  * @param argv The command-line arguments.
  * @return int The exit code of the application.
  */
 int main(int argc, char **argv) {
+
+  enum class ActiveMaskMode { Person, Color };
+
+  /// Transient session state that is persisted alongside AppSettings so that
+  /// colour targets and ROI selections survive pipeline restarts.
+  struct SessionSelections {
+    bool hasColorTarget = false;
+    float hue = 0.0f;
+    float sat = 0.0f;
+    float val = 0.0f;
+    int hueTol = 0;
+    int satTol = 0;
+    int valTol = 0;
+    bool hasROI = false;
+    cv::Rect roiRect;
+    cv::Mat roiMask;
+  };
+
+  // Homebrew's Qt packaging can place platform plugins under qtbase rather
+  // than the more generic plugin path returned at runtime, so probe a few
+  // likely roots and only accept one that contains the Cocoa platform plugin.
+  const QStringList pluginRoots = {
+      QLibraryInfo::path(QLibraryInfo::PluginsPath),
+      "/opt/homebrew/opt/qtbase/share/qt/plugins",
+      "/opt/homebrew/share/qt/plugins",
+  };
+
+  for (const QString &pluginPath : pluginRoots) {
+    if (pluginPath.isEmpty())
+      continue;
+
+    const QString platformPath = pluginPath + "/platforms";
+    const QString cocoaPlugin = platformPath + "/libqcocoa.dylib";
+    if (!QFileInfo::exists(cocoaPlugin))
+      continue;
+
+    qputenv("QT_PLUGIN_PATH", pluginPath.toUtf8());
+    qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", platformPath.toUtf8());
+    break;
+  }
+
+  // Set organisation / app name so QSettings stores in a predictable location
+  QCoreApplication::setOrganizationName("GravyLensing");
+  QCoreApplication::setApplicationName("gravy_lens");
+
   QApplication app(argc, argv);
 
-  // Parse options
-  CommandLineOptions opts = CommandLineOptions::parse(app);
-  int nthreads = opts.nthreads;
-  float strength = opts.strength;
-  float softening = opts.softening;
-  int padFactor = opts.padFactor;
-  bool debugGrid = opts.debugGrid;
-  int modelSize = opts.modelSize;
-  int deviceIndex = opts.deviceIndex;
-  float temporalSmooth = opts.temporalSmooth;
-  float lowerRes = opts.lowerRes;
-  int secondsPerBackground = opts.secondsPerBackground;
-  bool distortInside = opts.distortInside;
-  bool flip = opts.flip;
-  bool selectROI = opts.selectROI;
-  const std::string modelPath = opts.modelPath;
+  qRegisterMetaType<cv::Mat>("cv::Mat");
+  qRegisterMetaType<cv::Rect>("cv::Rect");
 
-  // Correct the number of threads to account for those that have
-  // been taken by Qt
-  nthreads -= 3;
+  QSettings savedSettings;
+  AppSettings appSettings;
+  appSettings.load(savedSettings);
 
-  // Init FFTW threading
+  CommandLineOptions opts = CommandLineOptions::parse(app, appSettings);
+  appSettings.nthreads = opts.nthreads;
+  appSettings.strength = opts.strength;
+  appSettings.softening = opts.softening;
+  appSettings.deviceIndex = opts.deviceIndex;
+  appSettings.debugGrid = opts.debugGrid;
+  appSettings.padFactor = opts.padFactor;
+  appSettings.modelSize = opts.modelSize;
+  appSettings.temporalSmooth = opts.temporalSmooth;
+  appSettings.lowerRes = opts.lowerRes;
+  appSettings.secondsPerBackground = opts.secondsPerBackground;
+  appSettings.distortInside = opts.distortInside;
+  appSettings.flip = opts.flip;
+  appSettings.selectROI = opts.selectROI;
+  appSettings.maskMode = opts.maskMode;
+  appSettings.colorModeType = opts.colorModeType;
+  appSettings.modelPath = opts.modelPath;
+
+  SessionSelections sessionSelections;
+  const auto loadSessionSelections = [&](QSettings &settings) {
+    sessionSelections.hasColorTarget =
+        settings.value("session/hasColorTarget", false).toBool();
+    sessionSelections.hue = settings.value("session/hue", 0.0).toFloat();
+    sessionSelections.sat = settings.value("session/sat", 0.0).toFloat();
+    sessionSelections.val = settings.value("session/val", 0.0).toFloat();
+    sessionSelections.hueTol = settings.value("session/hueTol", 0).toInt();
+    sessionSelections.satTol = settings.value("session/satTol", 0).toInt();
+    sessionSelections.valTol = settings.value("session/valTol", 0).toInt();
+    // ROI is session-only, not persisted across launches.
+    sessionSelections.hasROI = false;
+  };
+  loadSessionSelections(savedSettings);
+
+  {
+    SettingsDialog startupDialog(appSettings, "Session Setup",
+                                 "Start Session",
+                                 sessionSelections.hue,
+                                 sessionSelections.sat,
+                                 sessionSelections.val,
+                                 sessionSelections.hasColorTarget,
+                                 sessionSelections.hasROI,
+                                 sessionSelections.roiRect.x,
+                                 sessionSelections.roiRect.y,
+                                 sessionSelections.roiRect.width,
+                                 sessionSelections.roiRect.height);
+    if (startupDialog.exec() != QDialog::Accepted) {
+      return 0;
+    }
+    appSettings = startupDialog.settings();
+  }
+
   fftwf_init_threads();
-  fftwf_plan_with_nthreads(nthreads);
 
-  // Load backgrounds from the specified directory
-  Backgrounds *backgrounds = initBackgrounds(bgDir);
+  Backgrounds *backgrounds =
+      initBackgrounds(appSettings.backgroundsDir);
+  ViewPort *vp = initViewport(backgrounds, appSettings, appSettings.debugGrid);
 
-  // Create UI
-  ViewPort *vp = initViewport(backgrounds, debugGrid);
+  AppSettings activeSettings = appSettings;
+  CameraFeed *camFeed = nullptr;
+  SegmentationWorker *segWorker = nullptr;
+  ColorMaskWorker *colorWorker = nullptr;
+  LensingWorker *lensWorker = nullptr;
+  QThread *camThread = nullptr;
+  QThread *maskThread = nullptr;
+  QThread *lensThread = nullptr;
+  QTimer *bgTimer = nullptr;
+  QMetaObject::Connection frameToSegConnection;
+  QMetaObject::Connection frameToColorConnection;
+  bool personModeAvailable = false;
+  ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
+  std::function<void(ActiveMaskMode)> setActiveMaskMode;
 
-  // Create workers & threads
+  const auto saveSessionSelections = [&](QSettings &settings) {
+    settings.setValue("session/hasColorTarget", sessionSelections.hasColorTarget);
+    settings.setValue("session/hue", sessionSelections.hue);
+    settings.setValue("session/sat", sessionSelections.sat);
+    settings.setValue("session/val", sessionSelections.val);
+    settings.setValue("session/hueTol", sessionSelections.hueTol);
+    settings.setValue("session/satTol", sessionSelections.satTol);
+    settings.setValue("session/valTol", sessionSelections.valTol);
+    // ROI is session-only; never persisted.
+  };
 
-  // Camera feed
-  CameraFeed *camFeed = new CameraFeed(deviceIndex, flip, selectROI);
-  QThread *camThread = new QThread;
-  camFeed->moveToThread(camThread);
-  QObject::connect(camThread, &QThread::started, camFeed,
-                   &CameraFeed::startCaptureLoop);
-  camThread->start();
+  // ── Pipeline lifecycle helpers ─────────────────────────────────────
+  // stopPipeline  – gracefully tears down all workers and threads.
+  // startPipeline – builds and wires the full processing pipeline from
+  //                 a settings snapshot and current session selections.
 
-  // If we failed to open the camera, we can't continue
-  if (!camFeed->isOpen()) {
+  const auto stopPipeline = [&]() {
+    if (bgTimer != nullptr) {
+      bgTimer->stop();
+      delete bgTimer;
+      bgTimer = nullptr;
+    }
+
+    if (camFeed != nullptr) {
+      camFeed->stopCaptureLoop();
+    }
+
+    // Post deferred-delete events to the workers' threads *before* we quit
+    // those threads.  Otherwise the delete events can never be dispatched
+    // and destruction on the main thread may touch stale thread-affinity
+    // data, causing a crash.
+    if (segWorker != nullptr)
+      segWorker->deleteLater();
+    if (colorWorker != nullptr)
+      colorWorker->deleteLater();
+    if (lensWorker != nullptr)
+      lensWorker->deleteLater();
+    if (camFeed != nullptr)
+      camFeed->deleteLater();
+
+    if (maskThread != nullptr) {
+      maskThread->quit();
+      maskThread->wait();
+    }
+    if (lensThread != nullptr) {
+      lensThread->quit();
+      lensThread->wait();
+    }
+    if (camThread != nullptr) {
+      camThread->quit();
+      camThread->wait();
+    }
+
+    delete maskThread;
+    delete lensThread;
+    delete camThread;
+
+    camFeed = nullptr;
+    segWorker = nullptr;
+    colorWorker = nullptr;
+    lensWorker = nullptr;
+    maskThread = nullptr;
+    lensThread = nullptr;
+    camThread = nullptr;
+    personModeAvailable = false;
+    frameToSegConnection = QMetaObject::Connection();
+    frameToColorConnection = QMetaObject::Connection();
+  };
+
+  const auto attachPersonWorker = [&](SegmentationWorker *worker) {
+    if (worker == nullptr) {
+      return;
+    }
+
+    QObject::connect(worker, &SegmentationWorker::maskReady, lensWorker,
+                     [lensWorker](const cv::Mat &mask) {
+                       if (lensWorker)
+                         lensWorker->submitMask(mask);
+                     },
+                     Qt::DirectConnection);
+    QObject::connect(backgrounds, &Backgrounds::backgroundChanged, worker,
+                     &SegmentationWorker::onBackgroundChange,
+                     Qt::QueuedConnection);
+    QObject::connect(worker, &SegmentationWorker::segmentationError,
+                     reportError);
+    QObject::connect(worker, &SegmentationWorker::maskReady, vp,
+                     &ViewPort::setMask, Qt::QueuedConnection);
+  };
+
+  const auto ensurePersonWorkerLoaded = [&]() -> bool {
+    if (segWorker != nullptr) {
+      return personModeAvailable;
+    }
+
+    const int nfftThreads = std::max(1, activeSettings.nthreads - 3);
+    SegmentationWorker *newSegWorker =
+        new SegmentationWorker(activeSettings.modelPath, activeSettings.modelSize,
+                               nfftThreads, activeSettings.temporalSmooth,
+                               activeSettings.lowerRes);
+    if (!newSegWorker->isModelLoaded()) {
+      reportError("Failed to load segmentation model from " +
+                  activeSettings.modelPath);
+      delete newSegWorker;
+      return false;
+    }
+
+    newSegWorker->moveToThread(maskThread);
+    attachPersonWorker(newSegWorker);
+    segWorker = newSegWorker;
+    personModeAvailable = true;
+
+    QMetaObject::invokeMethod(segWorker,
+                              [worker = segWorker]() { worker->setEnabled(false); },
+                              Qt::QueuedConnection);
+    emit backgrounds->backgroundChanged(backgrounds->current());
+    return true;
+  };
+
+  const auto startPipeline = [&](const AppSettings &settings,
+                                 const SessionSelections &selections,
+                                 bool isReconfigure = false) -> bool {
+    const int nfftThreads = std::max(1, settings.nthreads - 3);
+    fftwf_plan_with_nthreads(nfftThreads);
+
+    // On a reconfigure we never auto-open the blocking ROI selector,
+    // even when the saved setting says selectROI is true.
+    const bool showROI = settings.selectROI && !isReconfigure;
+
+    CameraFeed *newCamFeed = new CameraFeed(settings.deviceIndex, settings.flip,
+                                            showROI);
+    if (!newCamFeed->isOpen()) {
+      delete newCamFeed;
+      return false;
+    }
+
+    SegmentationWorker *newSegWorker = nullptr;
+    bool newPersonModeAvailable = false;
+    if (settings.maskMode == "person") {
+      newSegWorker = new SegmentationWorker(settings.modelPath,
+                                            settings.modelSize, nfftThreads,
+                                            settings.temporalSmooth,
+                                            settings.lowerRes);
+      newPersonModeAvailable = newSegWorker->isModelLoaded();
+      if (!newPersonModeAvailable) {
+        reportError("Failed to load segmentation model from " +
+                    settings.modelPath);
+        delete newSegWorker;
+        delete newCamFeed;
+        return false;
+      }
+    }
+
+    // Colour mode is always started without an automatic picker.  The user
+    // explicitly chooses/re-chooses the target via menu or key binding.
+    ColorMaskWorker *newColorWorker = new ColorMaskWorker(settings.lowerRes);
+
+    if (selections.hasColorTarget) {
+      newColorWorker->applyReselectionTarget(selections.hue, selections.sat,
+                                             selections.val, selections.hueTol,
+                                             selections.satTol,
+                                             selections.valTol, true);
+    }
+    newColorWorker->setTrackedBlobMode(settings.colorModeType == "tracked_blob");
+    newColorWorker->setTolerances(settings.colorHueTol, settings.colorSatTol,
+                                  settings.colorValTol);
+
+    LensingWorker *newLensWorker =
+        new LensingWorker(settings.strength, settings.softening,
+                          settings.padFactor, nfftThreads, settings.lowerRes,
+                          settings.distortInside);
+
+    QThread *newMaskThread = new QThread;
+    QThread *newLensThread = new QThread;
+    QThread *newCamThread = new QThread;
+
+    // Apply saved ROI *before* moving the camera feed to its thread so that
+    // all direct method calls happen on the calling (main) thread.
+    if (selections.hasROI && !showROI) {
+      cv::Mat roiMask = selections.roiMask.clone();
+      if (roiMask.empty() && selections.roiRect.width > 0 &&
+          selections.roiRect.height > 0) {
+        const cv::Mat selectionFrame = newCamFeed->captureSelectionFrame();
+        if (!selectionFrame.empty() && selections.roiRect.x >= 0 &&
+            selections.roiRect.y >= 0 &&
+            selections.roiRect.x + selections.roiRect.width <=
+                selectionFrame.cols &&
+            selections.roiRect.y + selections.roiRect.height <=
+                selectionFrame.rows) {
+          roiMask = cv::Mat(selectionFrame.size(), CV_8UC1, cv::Scalar(0));
+          cv::rectangle(roiMask, selections.roiRect, cv::Scalar(255),
+                        cv::FILLED);
+        }
+      }
+
+      if (!roiMask.empty()) {
+        newCamFeed->setROI(selections.roiRect, roiMask);
+      }
+    }
+
+    if (newSegWorker != nullptr) {
+      newSegWorker->moveToThread(newMaskThread);
+    }
+    newColorWorker->moveToThread(newMaskThread);
+    newLensWorker->moveToThread(newLensThread);
+    newCamFeed->moveToThread(newCamThread);
+
+    QObject::connect(newCamThread, &QThread::started, newCamFeed,
+                     &CameraFeed::startCaptureLoop);
+
+    connectCommonSignals(newCamFeed, newLensWorker, vp, backgrounds);
+
+    if (newSegWorker != nullptr) {
+      QObject::connect(newSegWorker, &SegmentationWorker::maskReady,
+                       newLensWorker, [newLensWorker](const cv::Mat &mask) {
+                         newLensWorker->submitMask(mask);
+                       },
+                       Qt::DirectConnection);
+      QObject::connect(backgrounds, &Backgrounds::backgroundChanged,
+                       newSegWorker, &SegmentationWorker::onBackgroundChange,
+                       Qt::QueuedConnection);
+      QObject::connect(newSegWorker, &SegmentationWorker::segmentationError,
+                       reportError);
+    }
+
+    QObject::connect(newColorWorker, &ColorMaskWorker::maskReady,
+                     newLensWorker, [newLensWorker](const cv::Mat &mask) {
+                       newLensWorker->submitMask(mask);
+                     },
+                     Qt::DirectConnection);
+    QObject::connect(backgrounds, &Backgrounds::backgroundChanged,
+                     newColorWorker, &ColorMaskWorker::onBackgroundChange,
+                     Qt::QueuedConnection);
+    QObject::connect(newColorWorker, &ColorMaskWorker::maskReady, vp,
+                     &ViewPort::setMask, Qt::QueuedConnection);
+    if (newSegWorker != nullptr) {
+      QObject::connect(newSegWorker, &SegmentationWorker::maskReady, vp,
+                       &ViewPort::setMask, Qt::QueuedConnection);
+    }
+    QObject::connect(newColorWorker, &ColorMaskWorker::maskError, reportError);
+
+    QObject::connect(newColorWorker,
+                     &ColorMaskWorker::reselectionRequested, vp,
+                     [&, colorWorker = newColorWorker](const cv::Mat &frame) {
+                         const auto stats =
+                             ColorMaskWorker::runInteractiveColorPicker(frame);
+                         const bool success = stats.count > 0;
+                        const float kSpreadScale = 2.5f;
+                        const int hueTol = std::max(
+                            12, static_cast<int>(std::ceil(stats.hueSpread * kSpreadScale)));
+                        const int satTol = std::max(
+                            120, static_cast<int>(std::ceil(stats.satSpread * kSpreadScale)));
+                        const int valTol = std::max(
+                            180, static_cast<int>(std::ceil(stats.valSpread * kSpreadScale)));
+                        QMetaObject::invokeMethod(
+                            colorWorker, "applyReselectionTarget",
+                            Qt::QueuedConnection,
+                            Q_ARG(float, stats.hue),
+                            Q_ARG(float, stats.sat),
+                            Q_ARG(float, stats.val),
+                            Q_ARG(int, hueTol),
+                             Q_ARG(int, satTol),
+                             Q_ARG(int, valTol),
+                             Q_ARG(bool, success));
+
+                          if (success) {
+                            sessionSelections.hasColorTarget = true;
+                            sessionSelections.hue = stats.hue;
+                            sessionSelections.sat = stats.sat;
+                            sessionSelections.val = stats.val;
+                            sessionSelections.hueTol = hueTol;
+                            sessionSelections.satTol = satTol;
+                            sessionSelections.valTol = valTol;
+                            activeSettings.colorHueTol = hueTol;
+                            activeSettings.colorSatTol = satTol;
+                            activeSettings.colorValTol = valTol;
+                            vp->setSettings(activeSettings);
+                            QSettings s;
+                            activeSettings.save(s);
+                            saveSessionSelections(s);
+                         }
+                       },
+                     Qt::QueuedConnection);
+
+    QObject::connect(newColorWorker, &ColorMaskWorker::selectionStateChanged,
+                     vp,
+                     [&](bool ready) {
+                       if (!ready && activeMaskMode == ActiveMaskMode::Color &&
+                           personModeAvailable) {
+                         std::cout << "[Main] Color selection cancelled; "
+                                      "reverting to person mode\n";
+                         if (setActiveMaskMode)
+                           setActiveMaskMode(ActiveMaskMode::Person);
+                       }
+                     },
+                     Qt::QueuedConnection);
+
+    newMaskThread->start();
+    newLensThread->start();
+
+    camFeed = newCamFeed;
+    segWorker = newSegWorker;
+    colorWorker = newColorWorker;
+    lensWorker = newLensWorker;
+    maskThread = newMaskThread;
+    lensThread = newLensThread;
+    camThread = newCamThread;
+    personModeAvailable = newPersonModeAvailable;
+
+    setActiveMaskMode = [&](ActiveMaskMode mode) {
+      activeMaskMode = mode;
+      if (mode == ActiveMaskMode::Person && !ensurePersonWorkerLoaded()) {
+        return;
+      }
+
+      const bool enablePerson = mode == ActiveMaskMode::Person;
+      const bool enableColor = mode == ActiveMaskMode::Color;
+
+      if (frameToSegConnection)
+        QObject::disconnect(frameToSegConnection);
+      if (frameToColorConnection)
+        QObject::disconnect(frameToColorConnection);
+
+      if (enablePerson && segWorker != nullptr) {
+        frameToSegConnection = QObject::connect(
+            camFeed, &CameraFeed::frameCaptured, segWorker,
+            [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
+            Qt::DirectConnection);
+      }
+      if (enableColor) {
+        frameToColorConnection = QObject::connect(
+            camFeed, &CameraFeed::frameCaptured, colorWorker,
+            [colorWorker](const cv::Mat &frame) {
+              colorWorker->submitFrame(frame);
+            },
+            Qt::DirectConnection);
+      }
+
+      if (segWorker != nullptr) {
+        QMetaObject::invokeMethod(
+            segWorker,
+            [segWorker, enablePerson]() {
+              if (segWorker)
+                segWorker->setEnabled(enablePerson);
+            },
+            Qt::QueuedConnection);
+      }
+      QMetaObject::invokeMethod(
+          colorWorker,
+          [colorWorker, enableColor]() {
+            if (colorWorker) colorWorker->setEnabled(enableColor);
+          },
+          Qt::QueuedConnection);
+
+      vp->setColorModeActive(enableColor);
+      vp->setMaskModeLabel(mode == ActiveMaskMode::Color);
+
+      if (enableColor && !sessionSelections.hasColorTarget) {
+        std::cout << "[Main] Color mode active with no selected target. "
+                     "Use Shift+S or File > Select Color...\n";
+      }
+
+      std::cout << "[Main] Active mask mode: "
+                << (mode == ActiveMaskMode::Person ? "person" : "color")
+                << "\n";
+    };
+
+    vp->setSettings(settings);
+    vp->setColorTarget(selections.hue, selections.sat, selections.val,
+                        selections.hasColorTarget);
+    vp->setROIState(selections.hasROI,
+                     selections.roiRect.x, selections.roiRect.y,
+                     selections.roiRect.width, selections.roiRect.height);
+    vp->setDebugGridEnabled(settings.debugGrid);
+
+    const ActiveMaskMode desiredMode =
+        settings.maskMode == "color" ? ActiveMaskMode::Color
+                                       : ActiveMaskMode::Person;
+    setActiveMaskMode(desiredMode);
+    vp->setDebugGridChecked(settings.debugGrid);
+
+    vp->setBackground(backgrounds->current());
+    emit backgrounds->backgroundChanged(backgrounds->current());
+    newCamThread->start();  // camera last — workers primed first
+
+    if (settings.secondsPerBackground > 0) {
+      bgTimer = new QTimer(vp);
+      QObject::connect(bgTimer, &QTimer::timeout, backgrounds,
+                       &Backgrounds::next);
+      bgTimer->start(settings.secondsPerBackground * 1000);
+    }
+
+    return true;
+  };
+
+  if (!startPipeline(activeSettings, sessionSelections)) {
     return -1;
   }
 
-  // Segmentation
-  auto segWorker = new SegmentationWorker(modelPath, modelSize, nthreads,
-                                          temporalSmooth, lowerRes);
+  activeSettings.save(savedSettings);
+  saveSessionSelections(savedSettings);
 
-  // If we failed to load the model, we can't continue
-  if (!segWorker->isModelLoaded()) {
-    reportError("Failed to load segmentation model from " + modelPath);
-    return -1;
+  if (activeSettings.maskMode == "color" && !sessionSelections.hasColorTarget &&
+      colorWorker != nullptr) {
+    QMetaObject::invokeMethod(colorWorker, &ColorMaskWorker::triggerReselect,
+                              Qt::QueuedConnection);
   }
 
-  // Move the segmentation worker to its own thread
-  QThread *segThread = new QThread;
-  segWorker->moveToThread(segThread);
-  segThread->start();
+  // ── ViewPort menu signals → pipeline actions ───────────────────────
+  // These connections handle user-initiated events from the menu bar
+  // during an active session.
 
-  // Lensing
-  auto lensWorker = new LensingWorker(strength, softening, padFactor, nthreads,
-                                      lowerRes, distortInside);
-  QThread *lensThread = new QThread;
-  lensWorker->moveToThread(lensThread);
-  lensThread->start();
+  QObject::connect(vp, &ViewPort::debugGridToggled, vp,
+                   [vp, &activeSettings, &saveSessionSelections](bool enabled) {
+                     vp->setDebugGridEnabled(enabled);
+                     vp->setDebugGridChecked(enabled);
+                     activeSettings.debugGrid = enabled;
+                     vp->setSettings(activeSettings);
+                     QSettings s;
+                     activeSettings.save(s);
+                     saveSessionSelections(s);
+                   });
 
-  // Wire up signals/slots
-  connectSignals(camFeed, segWorker, lensWorker, vp, backgrounds, debugGrid);
+  QObject::connect(vp, &ViewPort::backgroundIndexSelected, backgrounds,
+                   &Backgrounds::setIndex);
 
-  // Prime initial background
-  vp->setBackground(backgrounds->current());
-  emit backgrounds->backgroundChanged(backgrounds->current());
+  QObject::connect(vp, &ViewPort::selectROIRequested, vp, [&]() {
+    if (camFeed == nullptr || camThread == nullptr) {
+      return;
+    }
 
-  // If we are updating each background every X seconds, set up a timer to do
-  // that. IF not secondsPerBackground is -1 and we don't do anything.
-  if (secondsPerBackground > 0) {
-    QTimer *timer = new QTimer();
-    QObject::connect(timer, &QTimer::timeout, backgrounds, &Backgrounds::next);
-    timer->start(secondsPerBackground * 1000);
-  }
+    camFeed->stopCaptureLoop();
+    camThread->quit();
+    camThread->wait();
 
-  // Run!
+    cv::Mat frame = camFeed->captureSelectionFrame();
+    if (!frame.empty()) {
+      const auto [rect, mask] = selectROIAndMask(frame, false);
+      if (rect.width > 0 && rect.height > 0) {
+        camFeed->setROI(rect, mask);
+        sessionSelections.hasROI = true;
+        sessionSelections.roiRect = rect;
+        sessionSelections.roiMask = mask.clone();
+        vp->setROIState(true, rect.x, rect.y, rect.width, rect.height);
+        QSettings s;
+        activeSettings.save(s);
+        saveSessionSelections(s);
+      }
+    }
+
+    camThread->start();
+  });
+
+  QObject::connect(vp, &ViewPort::selectColorRequested, vp, [&]() {
+    if (colorWorker == nullptr || !setActiveMaskMode)
+      return;
+
+    if (activeMaskMode != ActiveMaskMode::Color) {
+      setActiveMaskMode(ActiveMaskMode::Color);
+    }
+
+    QMetaObject::invokeMethod(colorWorker, &ColorMaskWorker::triggerReselect,
+                              Qt::QueuedConnection);
+  });
+
+  QObject::connect(vp, &ViewPort::toggleMaskModeRequested, vp, [&]() {
+    if (!segWorker || !colorWorker || !setActiveMaskMode)
+      return;
+
+    if (activeMaskMode == ActiveMaskMode::Color) {
+      if (!personModeAvailable) {
+        reportError("Person mode is unavailable because the segmentation "
+                    "model failed to load");
+        return;
+      }
+      setActiveMaskMode(ActiveMaskMode::Person);
+      activeSettings.maskMode = "person";
+      vp->setSettings(activeSettings);
+      QSettings s;
+      activeSettings.save(s);
+      saveSessionSelections(s);
+      return;
+    }
+
+    setActiveMaskMode(ActiveMaskMode::Color);
+    activeSettings.maskMode = "color";
+    vp->setSettings(activeSettings);
+    QSettings s;
+    activeSettings.save(s);
+    saveSessionSelections(s);
+  });
+
+  // ── Session restart handler ────────────────────────────────────────
+  // Triggered by the Session Settings dialog.  Preserves the current
+  // colour target and ROI, tears down the pipeline, and rebuilds it
+  // with the new settings.  Falls back to the previous configuration
+  // if the new one fails.
+
+  QObject::connect(vp, &ViewPort::settingsChanged, vp,
+                   [&](const AppSettings &newSettings) {
+                      if (newSettings.equals(activeSettings)) {
+                        vp->setSettings(activeSettings);
+                        return;
+                      }
+
+                      const AppSettings previousSettings = activeSettings;
+                      const SessionSelections previousSelections =
+                          sessionSelections;
+                       const bool actuallySwitchedToColor =
+                           previousSettings.maskMode != "color" &&
+                           newSettings.maskMode == "color";
+
+                       if (vp->hasColorTarget()) {
+                         sessionSelections.hasColorTarget = true;
+                         sessionSelections.hue = vp->targetHue();
+                         sessionSelections.sat = vp->targetSat();
+                         sessionSelections.val = vp->targetVal();
+                         sessionSelections.hueTol = newSettings.colorHueTol;
+                         sessionSelections.satTol = newSettings.colorSatTol;
+                         sessionSelections.valTol = newSettings.colorValTol;
+                       } else {
+                         sessionSelections.hasColorTarget = false;
+                         sessionSelections.hue = 0.0f;
+                         sessionSelections.sat = 0.0f;
+                         sessionSelections.val = 0.0f;
+                       }
+
+                       // sessionSelections is already up-to-date from the
+                       // live handlers (reselection lambda, ROI handler).
+                      // No need to BlockingQueuedConnection-query workers.
+
+                      stopPipeline();
+
+                      if (!startPipeline(newSettings, sessionSelections,
+                                         /*isReconfigure=*/true)) {
+                        QMessageBox::warning(
+                            vp, "Settings Not Applied",
+                            "The new settings could not be applied. Restoring "
+                            "the previous working configuration.");
+
+                        sessionSelections = previousSelections;
+
+                        if (!startPipeline(previousSettings, previousSelections,
+                                           true)) {
+                          QMessageBox::critical(
+                              vp, "Fatal Configuration Error",
+                              "The app could not restore the previous working "
+                             "configuration. It will now exit.");
+                         qApp->quit();
+                         return;
+                       }
+
+                       vp->setSettings(previousSettings);
+                       activeSettings = previousSettings;
+                       return;
+                     }
+
+                      activeSettings = newSettings;
+                      vp->setColorTarget(sessionSelections.hue,
+                                          sessionSelections.sat,
+                                          sessionSelections.val,
+                                          sessionSelections.hasColorTarget);
+                      QSettings s;
+                      activeSettings.save(s);
+                      saveSessionSelections(s);
+
+                      // Only auto-trigger the colour picker when the user
+                      // deliberately switches *into* colour mode.  If we are
+                      // already in colour mode we keep the current target.
+                      if (actuallySwitchedToColor &&
+                          !sessionSelections.hasColorTarget) {
+                        std::cout << "[Main] Switched to color mode. Use "
+                                     "Shift+S or File > Select Color... to "
+                                     "choose a target.\n";
+                      }
+                   });
+
   int ret = app.exec();
 
-  // 9) Cleanup threads
-  segThread->quit();
-  segThread->wait();
-  lensThread->quit();
-  lensThread->wait();
-  camThread->quit();
-  camThread->wait();
-
-  delete camFeed;
-  delete segWorker;
-  delete lensWorker;
-  delete camThread;
-  delete segThread;
-  delete lensThread;
-
+  stopPipeline();
   return ret;
 }
