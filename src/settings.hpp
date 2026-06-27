@@ -34,14 +34,14 @@
 struct AppSettings {
 
   // ── Performance ────────────────────────────────────────────────────
-  int nthreads = 4;             // Total CPU threads (Qt reserves 3)
+  int nthreads = 12;            // Total CPU threads (Qt reserves 3)
 
   // ── Lensing ────────────────────────────────────────────────────────
-  float strength = 0.1f;        // Deflection multiplier
-  float softening = 30.0f;      // Kernel softening radius (px)
+  float strength = 4.0f;        // Deflection multiplier
+  float softening = 50.0f;      // Kernel softening radius (px)
   int padFactor = 2;            // FFT padding factor
-  float lowerRes = 1.0f;        // Resolution scale for lensing (0.1–1.0)
-  bool distortInside = false;   // Lens the interior of the mask too
+  float lowerRes = 0.5f;        // Resolution scale for lensing (0.1–1.0)
+  bool distortInside = true;    // Lens the interior of the mask too
 
   // ── Camera ─────────────────────────────────────────────────────────
   int deviceIndex = 0;          // OpenCV camera device index

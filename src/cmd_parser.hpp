@@ -72,18 +72,18 @@ public:
         "nthreads", QString::number(defaults.nthreads));
     parser.addOption(nthreadsOption);
 
-    // --strength <float> (default 0.1)
+    // --strength <float> (default 4.0)
     QCommandLineOption strengthOption(
         QStringList() << "s" << "strength",
-        "Strength factor for the lensing effect (float, default=0.1).",
+        "Strength factor for the lensing effect (float, default=4.0).",
         "strength", QString::number(defaults.strength));
     parser.addOption(strengthOption);
 
-    // --softening <float> (default 30.0)
+    // --softening <float> (default 50.0)
     QCommandLineOption softeningOption(
         QStringList() << "f" << "softening",
         "Softening radius in pixels applied to the lensing effect (float, "
-        "default=30.0).",
+        "default=50.0).",
         "softening", QString::number(defaults.softening));
     parser.addOption(softeningOption);
 
@@ -135,10 +135,10 @@ public:
         "temporalSmooth", QString::number(defaults.temporalSmooth));
     parser.addOption(temporalSmoothOption);
 
-    // lowerRes <float> (default 1.0)
+    // lowerRes <float> (default 0.5)
     QCommandLineOption lowerResOption(
         QStringList() << "lr" << "lowerRes",
-        "Lower resolution factor for the lensing effect (float, default=1.0).",
+        "Lower resolution factor for the lensing effect (float, default=0.5).",
         "lowerRes", QString::number(defaults.lowerRes));
     parser.addOption(lowerResOption);
 

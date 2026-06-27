@@ -145,9 +145,9 @@ saved session setting. Boolean flags accept an explicit `--no-` counterpart.
 Usage: ./gravy_lens [options]
 
 Options:
-  -n, --nthreads <n>              CPU threads (must be ≥ 2).
-  -s, --strength <f>              Lens strength multiplier (default 0.1).
-  -f, --softening <f>             Kernel softening radius in px (default 30.0).
+  -n, --nthreads <n>              CPU threads (must be ≥ 2; default 12).
+  -s, --strength <f>              Lens strength multiplier (default 4.0).
+  -f, --softening <f>             Kernel softening radius in px (default 50.0).
   -m, --modelSize <n>             Segmentation model input size (default 512).
   -d, --deviceIndex <n>           Camera device index (default 0).
   -g, --debugGrid                 Show 2×2 diagnostic grid at start.
@@ -155,9 +155,9 @@ Options:
   -p, --padFactor <n>             FFT padding multiplier (default 2).
   --mp, --modelPath <path>        TorchScript model path.
   -t, --temporalSmooth <f>        Mask temporal blending factor (default 0.25).
-  --lr, --lowerRes <f>            Resolution scale for lensing, 0.1–1.0 (default 1.0).
+  --lr, --lowerRes <f>            Resolution scale for lensing, 0.1–1.0 (default 0.5).
   --sb, --secondsPerBackground <n> Seconds per background; -1 = manual (default -1).
-  --di, --distortInside           Also lens the interior of the mask.
+  --di, --distortInside           Also lens the interior of the mask (default on).
   --no-distortInside              Force interior distortion off.
   --flip                          Mirror camera feed horizontally.
   --no-flip                       Force mirroring off.
@@ -168,8 +168,7 @@ Options:
 ### Example session
 
 ```bash
-./gravy_lens --nthreads 12 --softening 50 --strength 4 --lowerRes 0.5 \
-  --flip --distortInside
+./gravy_lens
 ```
 
 Choose **Person** mode and click **Start Session**.
