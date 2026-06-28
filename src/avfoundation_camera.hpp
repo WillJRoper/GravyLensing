@@ -11,6 +11,8 @@
 
 #include <opencv2/opencv.hpp>
 
+#include "apple_video_frame.hpp"
+
 class AvFoundationCamera {
 public:
   class Impl;
@@ -24,6 +26,9 @@ public:
   bool waitForFrame(cv::Mat &frame, int timeoutMs,
                     const std::atomic<bool> *stopRequested = nullptr);
   bool latestFrame(cv::Mat &frame) const;
+  bool waitForFrame(cv::Mat &frame, AppleVideoFrame &nativeFrame, int timeoutMs,
+                    const std::atomic<bool> *stopRequested = nullptr);
+  bool latestFrame(cv::Mat &frame, AppleVideoFrame &nativeFrame) const;
 
   double width() const;
   double height() const;

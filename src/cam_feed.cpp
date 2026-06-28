@@ -346,17 +346,28 @@ void CameraFeed::startCaptureLoop() {
 
   // Define a local reusable header for the frame
   cv::Mat frame;
+#ifdef __APPLE__
+  AppleVideoFrame nativeFrame;
+#endif
 
   // Loop until the end of time (or until the thread is stopped)
   while (!stopRequested_.load() && !QCoreApplication::closingDown()) {
     const auto t0 = std::chrono::steady_clock::now();
 
     // Capture a frame from the camera
+#ifdef __APPLE__
+    if (!avCamera_->waitForFrame(frame, nativeFrame, 500, &stopRequested_)) {
+      emit captureError("Frame capture failed");
+      std::cout << "[CameraFeed] Frame capture failed\n";
+      break;
+    }
+#else
     if (!readFrame(frame)) {
       emit captureError("Frame capture failed");
       std::cout << "[CameraFeed] Frame capture failed\n";
       break;
     }
+#endif
 
     // Flip the frame horizontally if requested
     if (flip_) {
@@ -377,6 +388,9 @@ void CameraFeed::startCaptureLoop() {
           applyROIMaskAndCrop(frame, mask, rect).clone());
     } else {
       emit frameCaptured(frame.clone());
+#ifdef __APPLE__
+      emit nativeFrameCaptured(AppleVideoFrame(nativeFrame.pixelBuffer, flip_));
+#endif
     }
 
     const auto t1 = std::chrono::steady_clock::now();

@@ -141,6 +141,7 @@ set(SOURCES
 if(APPLE)
   list(APPEND SOURCES src/metal_helper.mm)
   list(APPEND SOURCES src/avfoundation_camera.mm)
+  list(APPEND SOURCES src/vision_segmentation_helper.mm)
 endif()
 
 # ============================================================================
@@ -178,6 +179,9 @@ if(APPLE)
     "-framework Metal"
     "-framework MetalPerformanceShaders"
     "-framework CoreVideo"
+    "-framework CoreImage"
+    "-framework Vision"
+    "-framework ImageIO"
   )
 endif()
 

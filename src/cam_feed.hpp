@@ -35,6 +35,10 @@
 #include <opencv2/opencv.hpp>
 
 #ifdef __APPLE__
+#include "apple_video_frame.hpp"
+#endif
+
+#ifdef __APPLE__
 class AvFoundationCamera;
 #endif
 
@@ -88,6 +92,10 @@ public:
 signals:
   /// Emitted as soon as a new frame is ready
   void frameCaptured(const cv::Mat &frame);
+
+#ifdef __APPLE__
+  void nativeFrameCaptured(const AppleVideoFrame &frame);
+#endif
 
   /// Emitted if there's an error opening or reading the camera
   void captureError(const std::string &error);

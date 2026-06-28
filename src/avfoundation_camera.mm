@@ -64,12 +64,22 @@ public:
   explicit Impl(int deviceIndex) : deviceIndex_(deviceIndex) {}
 
   void onFrame(CMSampleBufferRef sampleBuffer) {
+    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+    if (imageBuffer == nullptr) {
+      return;
+    }
+
     cv::Mat frame = convertSampleBufferToBgr(sampleBuffer);
     if (frame.empty()) {
       return;
     }
 
     std::lock_guard<std::mutex> lock(frameMutex_);
+    if (latestPixelBuffer_ != nullptr) {
+      CVPixelBufferRelease(latestPixelBuffer_);
+      latestPixelBuffer_ = nullptr;
+    }
+    latestPixelBuffer_ = CVPixelBufferRetain(imageBuffer);
     latestFrame_ = std::move(frame);
     ++frameCounter_;
     frameCv_.notify_all();
@@ -87,6 +97,7 @@ public:
   mutable std::mutex frameMutex_;
   mutable std::condition_variable frameCv_;
   cv::Mat latestFrame_;
+  CVPixelBufferRef latestPixelBuffer_ = nullptr;
   uint64_t frameCounter_ = 0;
   uint64_t deliveredCounter_ = 0;
 };
@@ -229,6 +240,10 @@ void AvFoundationCamera::close() {
 
   {
     std::lock_guard<std::mutex> lock(impl_->frameMutex_);
+    if (impl_->latestPixelBuffer_ != nullptr) {
+      CVPixelBufferRelease(impl_->latestPixelBuffer_);
+      impl_->latestPixelBuffer_ = nullptr;
+    }
     impl_->latestFrame_.release();
     impl_->frameCounter_ = 0;
     impl_->deliveredCounter_ = 0;
@@ -245,6 +260,13 @@ void AvFoundationCamera::close() {
 }
 
 bool AvFoundationCamera::waitForFrame(cv::Mat &frame, int timeoutMs,
+                                      const std::atomic<bool> *stopRequested) {
+  AppleVideoFrame nativeFrame;
+  return waitForFrame(frame, nativeFrame, timeoutMs, stopRequested);
+}
+
+bool AvFoundationCamera::waitForFrame(cv::Mat &frame, AppleVideoFrame &nativeFrame,
+                                      int timeoutMs,
                                       const std::atomic<bool> *stopRequested) {
   if (!impl_) {
     return false;
@@ -271,11 +293,18 @@ bool AvFoundationCamera::waitForFrame(cv::Mat &frame, int timeoutMs,
   }
 
   frame = impl_->latestFrame_.clone();
+  nativeFrame = AppleVideoFrame(impl_->latestPixelBuffer_, false);
   impl_->deliveredCounter_ = impl_->frameCounter_;
   return true;
 }
 
 bool AvFoundationCamera::latestFrame(cv::Mat &frame) const {
+  AppleVideoFrame nativeFrame;
+  return latestFrame(frame, nativeFrame);
+}
+
+bool AvFoundationCamera::latestFrame(cv::Mat &frame,
+                                     AppleVideoFrame &nativeFrame) const {
   if (!impl_) {
     return false;
   }
@@ -285,6 +314,7 @@ bool AvFoundationCamera::latestFrame(cv::Mat &frame) const {
     return false;
   }
   frame = impl_->latestFrame_.clone();
+  nativeFrame = AppleVideoFrame(impl_->latestPixelBuffer_, false);
   return true;
 }
 

@@ -55,8 +55,15 @@
 #include "settings_dialog.hpp"
 #include "viewport.hpp"
 
+#ifdef __APPLE__
+#include "apple_video_frame.hpp"
+#endif
+
 // Register cv::Mat as a Qt metatype
 Q_DECLARE_METATYPE(cv::Mat)
+#ifdef __APPLE__
+Q_DECLARE_METATYPE(AppleVideoFrame)
+#endif
 
 /**
  * @brief Report any errors that occur during the application execution.
@@ -166,6 +173,9 @@ int main(int argc, char **argv) {
 
   qRegisterMetaType<cv::Mat>("cv::Mat");
   qRegisterMetaType<cv::Rect>("cv::Rect");
+#ifdef __APPLE__
+  qRegisterMetaType<AppleVideoFrame>("AppleVideoFrame");
+#endif
 
   QSettings savedSettings;
   AppSettings appSettings;
