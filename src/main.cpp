@@ -249,6 +249,10 @@ int main(int argc, char **argv) {
   QTimer *bgTimer = nullptr;
   QMetaObject::Connection frameToSegConnection;
   QMetaObject::Connection frameToColorConnection;
+#ifdef __APPLE__
+  QMetaObject::Connection frameToAppleSegConnection;
+  QMetaObject::Connection frameToSegGuidanceConnection;
+#endif
   bool personModeAvailable = false;
   ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
   std::function<void(ActiveMaskMode)> setActiveMaskMode;
@@ -278,6 +282,22 @@ int main(int argc, char **argv) {
 
     if (camFeed != nullptr) {
       camFeed->stopCaptureLoop();
+    }
+
+    if (frameToSegConnection)
+      QObject::disconnect(frameToSegConnection);
+    if (frameToColorConnection)
+      QObject::disconnect(frameToColorConnection);
+#ifdef __APPLE__
+    if (frameToAppleSegConnection)
+      QObject::disconnect(frameToAppleSegConnection);
+    if (frameToSegGuidanceConnection)
+      QObject::disconnect(frameToSegGuidanceConnection);
+#endif
+
+    if (segWorker != nullptr) {
+      QMetaObject::invokeMethod(segWorker, &SegmentationWorker::beginShutdown,
+                                Qt::BlockingQueuedConnection);
     }
 
     // Post deferred-delete events to the workers' threads *before* we quit
@@ -320,6 +340,10 @@ int main(int argc, char **argv) {
     personModeAvailable = false;
     frameToSegConnection = QMetaObject::Connection();
     frameToColorConnection = QMetaObject::Connection();
+#ifdef __APPLE__
+    frameToAppleSegConnection = QMetaObject::Connection();
+    frameToSegGuidanceConnection = QMetaObject::Connection();
+#endif
   };
 
   const auto attachPersonWorker = [&](SegmentationWorker *worker) {
@@ -574,12 +598,40 @@ int main(int argc, char **argv) {
         QObject::disconnect(frameToSegConnection);
       if (frameToColorConnection)
         QObject::disconnect(frameToColorConnection);
+#ifdef __APPLE__
+      if (frameToAppleSegConnection)
+        QObject::disconnect(frameToAppleSegConnection);
+      if (frameToSegGuidanceConnection)
+        QObject::disconnect(frameToSegGuidanceConnection);
+#endif
 
       if (enablePerson && segWorker != nullptr) {
+#ifdef __APPLE__
+        if (segWorker->usesAppleVision()) {
+          frameToSegGuidanceConnection = QObject::connect(
+              camFeed, &CameraFeed::frameCaptured, segWorker,
+              [segWorker](const cv::Mat &frame) {
+                segWorker->submitGuidanceFrame(frame);
+              },
+              Qt::DirectConnection);
+          frameToAppleSegConnection = QObject::connect(
+              camFeed, &CameraFeed::nativeFrameCaptured, segWorker,
+              [segWorker](const AppleVideoFrame &frame) {
+                segWorker->submitAppleFrame(frame);
+              },
+              Qt::DirectConnection);
+        } else {
+          frameToSegConnection = QObject::connect(
+              camFeed, &CameraFeed::frameCaptured, segWorker,
+              [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
+              Qt::DirectConnection);
+        }
+#else
         frameToSegConnection = QObject::connect(
             camFeed, &CameraFeed::frameCaptured, segWorker,
             [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
             Qt::DirectConnection);
+#endif
       }
       if (enableColor) {
         frameToColorConnection = QObject::connect(

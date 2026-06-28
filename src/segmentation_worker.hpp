@@ -23,7 +23,10 @@
 
 #pragma once
 
+#include <memory>
 #include <mutex>
+
+#include <QRect>
 
 // Qt includes
 #include <QDebug>
@@ -43,6 +46,10 @@
 // External includes
 #include <opencv2/opencv.hpp>
 
+#ifdef __APPLE__
+#include "apple_video_frame.hpp"
+#endif
+
 class SegmentationWorker : public QObject {
   Q_OBJECT
 
@@ -55,12 +62,19 @@ public:
   SegmentationWorker(const std::string &modelPath, int modelSize = 512,
                      int nthreads = 1, float temporalSmooth = 0.6f,
                      float lowerRes = 1.0f);
+  ~SegmentationWorker();
 
   // Check loaded model
   bool isModelLoaded() const { return modelLoaded_; }
+  bool usesAppleVision() const { return usingAppleVision_; }
 
   // Thread-safe frame submission that coalesces stale work.
   void submitFrame(const cv::Mat &frame);
+  void submitGuidanceFrame(const cv::Mat &frame);
+
+#ifdef __APPLE__
+  void submitAppleFrame(const AppleVideoFrame &frame);
+#endif
 
   // Whether this worker should process incoming frames.
   bool isEnabled() const { return enabled_; }
@@ -77,6 +91,7 @@ public Q_SLOTS:
 
   // Update the geometry when the background changes
   void onBackgroundChange(const cv::Mat &background);
+  void beginShutdown();
 
   // ===================== Qt Signals ==================
 
@@ -89,6 +104,8 @@ signals:
   void segmentationError(const std::string &error);
 
 private:
+  class ApplePersonSegmentationHelper;
+
   // ================== Private Member Variable Declarations ==================
 
   // Path to the segmentation model
@@ -103,6 +120,10 @@ private:
   // pre-allocated Tensor for inference on the CPU and GPU
   torch::Tensor inputCpuTensor_;
   torch::Tensor inputTensor_;
+
+  // macOS-native Vision backend, preferred when available.
+  std::unique_ptr<ApplePersonSegmentationHelper> appleSegmentationHelper_;
+  bool usingAppleVision_ = false;
 
   // Dimensions for the model
   int fastW_, fastH_;
@@ -123,6 +144,15 @@ private:
   cv::Mat latestMask_;
   cv::Mat prevPersonProb_;
   cv::Mat smoothMask_;
+  cv::Mat refinedPersonProb_;
+  cv::Mat latestGuidanceFrame_;
+  cv::Mat adaptiveAlpha_;
+  cv::Mat motionProbDelta_;
+  cv::Mat uncertaintyBand_;
+
+  // ROI acceleration state for the Vision backend.
+  cv::Rect currentVisionROI_;
+  int framesSinceVisionFullFrame_ = 0;
 
   // Smoothing factor in [0,1], defining weight between new and old mask
   const float temporalSmooth_ = 0.6f;
@@ -136,16 +166,35 @@ private:
   // Drop bolbs in the mask smaller than this
   const int minBlobArea = 50;
 
+  // Thresholds for converting the refined soft mask to a binary mask.
+  const float personOnThreshold_ = 0.58f;
+  const float personOffThreshold_ = 0.42f;
+
+  // Adaptive temporal smoothing parameters.
+  const float temporalMinAlpha_ = 0.18f;
+  const float temporalMaxAlpha_ = 0.82f;
+
+  // ROI acceleration parameters.
+  const int visionFullFrameInterval_ = 12;
+  const int visionROIPadding_ = 24;
+  const int visionMinROIDim_ = 160;
+  const float visionMaxROIAreaFraction_ = 0.85f;
+  const bool enableVisionROIAcceleration_ = false;
+
   // Did we load successfully?
   bool modelLoaded_ = false;
 
   // Whether this worker should process frames.
   bool enabled_ = false;
+  bool shuttingDown_ = false;
 
   // ================== Member Function Prototypes ==================
 
   // Detect the person mask in the current frame using a segmentation model.
   void detectPersonMask(const cv::Mat &frame);
+#ifdef __APPLE__
+  void detectPersonMask(const AppleVideoFrame &frame);
+#endif
 
   // Set up the segmentation model
   void setupSegmentationModel(const std::string &modelPath);
@@ -153,10 +202,19 @@ private:
   // Update the geometry when the background changes
   void updateGeometry(int width, int height);
   void drainPendingFrame();
+#ifdef __APPLE__
+  void drainPendingAppleFrame();
+#endif
 
   std::mutex pendingFrameMutex_;
   cv::Mat pendingFrame_;
   bool pendingFrameDrainScheduled_ = false;
+  std::mutex guidanceFrameMutex_;
+#ifdef __APPLE__
+  std::mutex pendingAppleFrameMutex_;
+  AppleVideoFrame pendingAppleFrame_;
+  bool pendingAppleFrameDrainScheduled_ = false;
+#endif
 };
 
 /**
