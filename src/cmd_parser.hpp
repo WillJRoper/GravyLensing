@@ -43,6 +43,7 @@ public:
   float strength;
   float softening;
   int deviceIndex;
+  int fps;
   bool debugGrid;
   int padFactor;
   int modelSize;
@@ -101,6 +102,13 @@ public:
         "Device index, i.e. which camera to use (int, default=0).",
         "deviceIndex", QString::number(defaults.deviceIndex));
     parser.addOption(deviceIndexOption);
+
+    // --fps <int> (default 30)
+    QCommandLineOption fpsOption(
+        QStringList() << "fps" << "frameRate",
+        "Target camera frame rate (int, default=30).",
+        "fps", QString::number(defaults.fps));
+    parser.addOption(fpsOption);
 
     // --debug-grid  (flag only; no argument)
     QCommandLineOption debugGridOption(
@@ -228,6 +236,12 @@ public:
     opts.deviceIndex = parser.value(deviceIndexOption).toInt(&ok);
     if (!ok) {
       std::cerr << "Error: --deviceIndex must be an integer.\n";
+      std::exit(-1);
+    }
+
+    opts.fps = parser.value(fpsOption).toInt(&ok);
+    if (!ok || opts.fps < 1) {
+      std::cerr << "Error: --fps must be a positive integer.\n";
       std::exit(-1);
     }
 

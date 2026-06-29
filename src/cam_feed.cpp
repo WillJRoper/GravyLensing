@@ -154,8 +154,8 @@ static cv::Mat applyROIMaskAndCrop(const cv::Mat &src, const cv::Mat &mask,
  * @param selectROI Whether to allow the user to select a region of interest
  *  (ROI) in the camera feed (default is false).
  */
-CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI)
-    : deviceIndex_(deviceIndex), flip_(flip), doingROI_(selectROI) {
+CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI, int fps)
+    : deviceIndex_(deviceIndex), fps_(fps), flip_(flip), doingROI_(selectROI) {
 
   // Initialize the camera feed and ensure it is opened successfully
   if (!initCamera()) {
@@ -262,7 +262,7 @@ bool CameraFeed::initCamera() {
 #ifdef __APPLE__
   avCamera_ = std::make_unique<AvFoundationCamera>(deviceIndex_);
   std::string error;
-  if (!avCamera_->open(error)) {
+  if (!avCamera_->open(error, fps_)) {
     std::cerr << "[CameraFeed] AVFoundation open failed: " << error << "\n";
     avCamera_.reset();
     return false;

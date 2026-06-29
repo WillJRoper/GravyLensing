@@ -45,6 +45,7 @@ struct AppSettings {
 
   // ── Camera ─────────────────────────────────────────────────────────
   int deviceIndex = 0;          // OpenCV camera device index
+  int fps = 30;                 // Target camera frame rate
   bool flip = false;            // Mirror feed horizontally
   bool selectROI = false;       // Open ROI selector on first start
 
@@ -71,7 +72,7 @@ struct AppSettings {
   bool equals(const AppSettings &other) const {
     return nthreads == other.nthreads && strength == other.strength &&
            softening == other.softening && deviceIndex == other.deviceIndex &&
-           debugGrid == other.debugGrid && padFactor == other.padFactor &&
+           fps == other.fps && debugGrid == other.debugGrid && padFactor == other.padFactor &&
            modelSize == other.modelSize &&
            temporalSmooth == other.temporalSmooth &&
            lowerRes == other.lowerRes &&
@@ -92,6 +93,7 @@ struct AppSettings {
     strength = s.value("strength", strength).toFloat();
     softening = s.value("softening", softening).toFloat();
     deviceIndex = s.value("deviceIndex", deviceIndex).toInt();
+    fps = s.value("fps", fps).toInt();
     debugGrid = s.value("debugGrid", debugGrid).toBool();
     padFactor = s.value("padFactor", padFactor).toInt();
     modelSize = s.value("modelSize", modelSize).toInt();
@@ -124,6 +126,7 @@ struct AppSettings {
     s.setValue("strength", strength);
     s.setValue("softening", softening);
     s.setValue("deviceIndex", deviceIndex);
+    s.setValue("fps", fps);
     s.setValue("debugGrid", debugGrid);
     s.setValue("padFactor", padFactor);
     s.setValue("modelSize", modelSize);

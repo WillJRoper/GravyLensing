@@ -186,6 +186,7 @@ int main(int argc, char **argv) {
   appSettings.strength = opts.strength;
   appSettings.softening = opts.softening;
   appSettings.deviceIndex = opts.deviceIndex;
+  appSettings.fps = opts.fps;
   appSettings.debugGrid = opts.debugGrid;
   appSettings.padFactor = opts.padFactor;
   appSettings.modelSize = opts.modelSize;
@@ -427,7 +428,7 @@ int main(int argc, char **argv) {
     const bool showROI = settings.selectROI && !isReconfigure;
 
     CameraFeed *newCamFeed = new CameraFeed(settings.deviceIndex, settings.flip,
-                                            showROI);
+                                            showROI, settings.fps);
     if (!newCamFeed->isOpen()) {
       delete newCamFeed;
       return false;

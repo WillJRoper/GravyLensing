@@ -37,14 +37,23 @@ static cv::Mat convertSampleBufferToBgr(CMSampleBufferRef sampleBuffer) {
   return bgr;
 }
 
-static FormatChoice chooseBestFormat(AVCaptureDevice *device) {
+static FormatChoice chooseBestFormat(AVCaptureDevice *device,
+                                     int desiredFps) {
   FormatChoice best;
   for (AVCaptureDeviceFormat *format in device.formats) {
     CMVideoDimensions dims =
         CMVideoFormatDescriptionGetDimensions(format.formatDescription);
     const int pixelCount = dims.width * dims.height;
     for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
-      const double fps = range.maxFrameRate;
+      const double targetFps = static_cast<double>(desiredFps);
+      // Skip ranges that can't reach the desired frame rate.  Allow a small
+      // epsilon for floating-point drift.
+      if (range.maxFrameRate < targetFps - 0.01)
+        continue;
+      // Pick the range whose maxFrameRate is closest to (but ≥) desiredFps.
+      // Among equal-fps ranges, prefer the smallest pixel count (less
+      // bandwidth / CPU to decode).
+      const double fps = std::min(range.maxFrameRate, targetFps);
       if (best.format == nil || fps > best.fps + 0.01 ||
           (std::abs(fps - best.fps) <= 0.01 && pixelCount < best.pixelCount)) {
         best.format = format;
@@ -123,7 +132,7 @@ AvFoundationCamera::AvFoundationCamera(int deviceIndex)
 
 AvFoundationCamera::~AvFoundationCamera() { close(); }
 
-bool AvFoundationCamera::open(std::string &error) {
+bool AvFoundationCamera::open(std::string &error, int desiredFps) {
   close();
 
   @autoreleasepool {
@@ -182,7 +191,7 @@ bool AvFoundationCamera::open(std::string &error) {
       if ([device isExposureModeSupported:AVCaptureExposureModeContinuousAutoExposure]) {
         device.exposureMode = AVCaptureExposureModeContinuousAutoExposure;
       }
-      const FormatChoice best = chooseBestFormat(device);
+      const FormatChoice best = chooseBestFormat(device, desiredFps);
       if (best.format != nil && best.range != nil) {
         device.activeFormat = best.format;
         // Use the exact min/max frame duration from the chosen range

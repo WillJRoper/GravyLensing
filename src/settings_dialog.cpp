@@ -160,6 +160,18 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   addFormRow(cameraForm, "Device index", deviceIndexSpin_->toolTip(),
              deviceIndexSpin_);
 
+  fpsCombo_ = new QComboBox;
+  fpsCombo_->setToolTip(
+      "Target camera frame rate.  The camera is configured for the closest "
+      "available rate at or above the chosen value.");
+  const int fpsOptions[] = {5, 10, 15, 20, 24, 25, 30, 60};
+  for (const int f : fpsOptions) {
+    fpsCombo_->addItem(QString("%1 fps").arg(f), f);
+    if (f == settings.fps)
+      fpsCombo_->setCurrentIndex(fpsCombo_->count() - 1);
+  }
+  addFormRow(cameraForm, "Frame rate", fpsCombo_->toolTip(), fpsCombo_);
+
   flipCheck_ = makeCheck("Mirror camera feed horizontally",
       "Flip the image so movement in the real world and on-screen are "
       "directionally consistent.");
@@ -521,6 +533,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
           &QPushButton::clicked, this, [this, syncModeGroups]() {
             const AppSettings defaults;
             deviceIndexSpin_->setValue(defaults.deviceIndex);
+            { const int idx = fpsCombo_->findData(defaults.fps); if (idx >= 0) fpsCombo_->setCurrentIndex(idx); }
             flipCheck_->setChecked(defaults.flip);
             selectROICheck_->setChecked(defaults.selectROI);
             maskModeCombo_->setCurrentIndex(
@@ -572,6 +585,7 @@ AppSettings SettingsDialog::settings() const {
   s.modelPath = modelPathEdit_->text().toStdString();
   s.nthreads = nthreadsSpin_->value();
   s.deviceIndex = deviceIndexSpin_->value();
+  s.fps = fpsCombo_->currentData().toInt();
   s.flip = flipCheck_->isChecked();
   s.selectROI = selectROICheck_->isChecked();
   s.maskMode = maskModeCombo_->currentData().toString().toStdString();

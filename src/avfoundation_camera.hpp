@@ -20,7 +20,7 @@ public:
   explicit AvFoundationCamera(int deviceIndex);
   ~AvFoundationCamera();
 
-  bool open(std::string &error);
+  bool open(std::string &error, int desiredFps = 30);
   void close();
 
   bool waitForFrame(cv::Mat &frame, int timeoutMs,

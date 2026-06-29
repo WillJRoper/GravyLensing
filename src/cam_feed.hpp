@@ -54,7 +54,8 @@ class CameraFeed : public QObject {
   Q_OBJECT
 
 public:
-  CameraFeed(int deviceIndex = 0, bool flip = false, bool selectROI = false);
+  CameraFeed(int deviceIndex = 0, bool flip = false, bool selectROI = false,
+             int fps = 30);
   ~CameraFeed();
 
   /// Start continuous capture in this thread
@@ -109,6 +110,7 @@ private:
 
   // The device index for the camera (0 for default camera)
   int deviceIndex_;
+  int fps_ = 30;
 
   // OpenCV video capture object
   cv::VideoCapture cap_;
