@@ -168,8 +168,18 @@ private:
   const int minBlobArea = 50;
 
   // Thresholds for converting the refined soft mask to a binary mask.
-  const float personOnThreshold_ = 0.58f;
-  const float personOffThreshold_ = 0.42f;
+  const float personOnThreshold_ = 0.50f;
+  const float personOffThreshold_ = 0.35f;
+
+  // Temporal median filter on the probability map.
+  // Maintains a circular buffer of recent probability maps and uses the
+  // per-pixel median instead of the raw frame.  This eliminates single-frame
+  // detection dropouts for small/distant people (the median ignores outliers)
+  // while preserving real transitions within ~2 frames.
+  static constexpr int kMedianWindow = 5;
+  std::vector<cv::Mat> probHistory_;
+  int probHistoryWriteIdx_ = 0;
+  int probHistoryCount_ = 0;
 
   // Adaptive temporal smoothing parameters.
   const float temporalMinAlpha_ = 0.18f;
@@ -181,6 +191,8 @@ private:
   const int visionMinROIDim_ = 160;
   const float visionMaxROIAreaFraction_ = 0.85f;
   const bool enableVisionROIAcceleration_ = false;
+
+
 
   // Did we load successfully?
   bool modelLoaded_ = false;

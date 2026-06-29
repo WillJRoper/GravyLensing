@@ -147,7 +147,7 @@ void adaptiveTemporalBlend(const cv::Mat &newPersonProb, cv::Mat &historyProb,
       cv::getStructuringElement(cv::MORPH_ELLIPSE, {5, 5});
 
   cv::absdiff(newPersonProb, historyProb, motionProbDelta);
-  motionProbDelta.convertTo(adaptiveAlpha, CV_32F, 2.4);
+  motionProbDelta.convertTo(adaptiveAlpha, CV_32F, 0.5);
 
   cv::inRange(newPersonProb, cv::Scalar(offThreshold), cv::Scalar(onThreshold),
               uncertaintyBand);
@@ -156,7 +156,7 @@ void adaptiveTemporalBlend(const cv::Mat &newPersonProb, cv::Mat &historyProb,
   cv::Mat uncertaintyFloat;
   uncertaintyBand.convertTo(uncertaintyFloat, CV_32F, 1.0 / 255.0);
 
-  adaptiveAlpha += uncertaintyFloat * 0.30f;
+  adaptiveAlpha += uncertaintyFloat * 0.10f;
   adaptiveAlpha += baseAlpha;
   cv::min(adaptiveAlpha, maxAlpha, adaptiveAlpha);
   cv::max(adaptiveAlpha, minAlpha, adaptiveAlpha);
@@ -184,6 +184,39 @@ cv::Rect paddedMaskBounds(const cv::Mat &mask, int padding, cv::Size limit) {
   bounds.height =
       std::min(limit.height - bounds.y, bounds.height + 2 * padding);
   return bounds;
+}
+
+/// Per-pixel median of N float probability maps (N = 5).
+/// Simple insertion sort — fast for such a tiny fixed input.
+static void computePixelMedian(const std::vector<cv::Mat> &history,
+                               cv::Mat &out) {
+  constexpr int N = 5;
+  out.create(history[0].size(), CV_32F);
+  const int rows = out.rows;
+  const int cols = out.cols;
+
+  for (int y = 0; y < rows; ++y) {
+    const float *srcRows[N];
+    for (int i = 0; i < N; ++i)
+      srcRows[i] = history[i].ptr<float>(y);
+    float *outRow = out.ptr<float>(y);
+
+    for (int x = 0; x < cols; ++x) {
+      float vals[N];
+      for (int i = 0; i < N; ++i)
+        vals[i] = srcRows[i][x];
+      for (int i = 1; i < N; ++i) {
+        const float key = vals[i];
+        int j = i - 1;
+        while (j >= 0 && vals[j] > key) {
+          vals[j + 1] = vals[j];
+          --j;
+        }
+        vals[j + 1] = key;
+      }
+      outRow[x] = vals[N / 2];
+    }
+  }
 }
 
 } // namespace
@@ -226,6 +259,11 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
   adaptiveAlpha_.create(fastH_, fastW_, CV_32F);
   motionProbDelta_.create(fastH_, fastW_, CV_32F);
   uncertaintyBand_.create(fastH_, fastW_, CV_8UC1);
+
+  // Pre-allocate median-filter circular buffer.
+  probHistory_.resize(kMedianWindow);
+  for (auto &m : probHistory_)
+    m.create(fastH_, fastW_, CV_32F);
 
   // Set up the segmentation model
   setupSegmentationModel(modelPath);
@@ -590,16 +628,18 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
                         (void *)personProb_t.data_ptr<float>());
 
   stageStart = stageEnd;
-  if (!havePrevProb_) {
-    prevPersonProb_ = newPersonProb.clone();
-    havePrevProb_ = true;
+  probHistory_[probHistoryWriteIdx_++] = newPersonProb.clone();
+  if (probHistoryWriteIdx_ == kMedianWindow) probHistoryWriteIdx_ = 0;
+  if (probHistoryCount_ < kMedianWindow) ++probHistoryCount_;
+
+  cv::Mat blendProb;
+  if (probHistoryCount_ >= kMedianWindow) {
+    computePixelMedian(probHistory_, blendProb);
   } else {
-    adaptiveTemporalBlend(newPersonProb, prevPersonProb_, adaptiveAlpha_,
-                          motionProbDelta_, uncertaintyBand_,
-                          temporalSmooth_, temporalMinAlpha_,
-                          temporalMaxAlpha_, personOnThreshold_,
-                          personOffThreshold_);
+    blendProb = newPersonProb;
   }
+  blendProb.copyTo(prevPersonProb_);
+  havePrevProb_ = true;
 
   refineSoftPersonMask(prevPersonProb_, frame, refinedPersonProb_, fastMask_,
                        personOnThreshold_, personOffThreshold_, minBlobArea);
@@ -697,16 +737,18 @@ void SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame) {
     guidanceFrame = latestGuidanceFrame_.clone();
   }
 
-  if (!havePrevProb_) {
-    prevPersonProb_ = newPersonProb.clone();
-    havePrevProb_ = true;
+  probHistory_[probHistoryWriteIdx_++] = newPersonProb.clone();
+  if (probHistoryWriteIdx_ == kMedianWindow) probHistoryWriteIdx_ = 0;
+  if (probHistoryCount_ < kMedianWindow) ++probHistoryCount_;
+
+  cv::Mat blendProb;
+  if (probHistoryCount_ >= kMedianWindow) {
+    computePixelMedian(probHistory_, blendProb);
   } else {
-    adaptiveTemporalBlend(newPersonProb, prevPersonProb_, adaptiveAlpha_,
-                          motionProbDelta_, uncertaintyBand_,
-                          temporalSmooth_, temporalMinAlpha_,
-                          temporalMaxAlpha_, personOnThreshold_,
-                          personOffThreshold_);
+    blendProb = newPersonProb;
   }
+  blendProb.copyTo(prevPersonProb_);
+  havePrevProb_ = true;
 
   refineSoftPersonMask(prevPersonProb_, guidanceFrame, refinedPersonProb_,
                        fastMask_,
