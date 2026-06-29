@@ -187,6 +187,10 @@ bool SegmentationWorker::ApplePersonSegmentationHelper::generatePersonProbabilit
     error = "Vision person segmentation is unavailable on this macOS version";
     return false;
   }
+  if (impl_->request_ == nil) {
+    error = "Vision request is unavailable";
+    return false;
+  }
 
   cv::Mat preparedFrame;
   if (frame.cols != targetWidth || frame.rows != targetHeight) {
@@ -203,32 +207,40 @@ bool SegmentationWorker::ApplePersonSegmentationHelper::generatePersonProbabilit
   }
 
   @autoreleasepool {
-    NSError *nsError = nil;
-    VNImageRequestHandler *handler =
-        [[VNImageRequestHandler alloc] initWithCVPixelBuffer:inputBuffer
-                                                 orientation:kCGImagePropertyOrientationUp
-                                                     options:@{}];
+    @try {
+      NSError *nsError = nil;
+      VNImageRequestHandler *handler =
+          [[VNImageRequestHandler alloc] initWithCVPixelBuffer:inputBuffer
+                                                   orientation:kCGImagePropertyOrientationUp
+                                                       options:@{}];
 
-    const BOOL success = [handler performRequests:@[ impl_->request_ ]
-                                            error:&nsError];
-    if (!success) {
-      error = nsError != nil ? nsError.localizedDescription.UTF8String
-                             : "Vision request failed";
+      const BOOL success = [handler performRequests:@[ impl_->request_ ]
+                                              error:&nsError];
+      if (!success) {
+        error = nsError != nil ? nsError.localizedDescription.UTF8String
+                               : "Vision request failed";
+        CVPixelBufferRelease(inputBuffer);
+        return false;
+      }
+
+      VNPixelBufferObservation *result = impl_->request_.results.firstObject;
+      if (result == nil) {
+        error = "Vision request returned no segmentation result";
+        CVPixelBufferRelease(inputBuffer);
+        return false;
+      }
+
+      const bool copied = copyMaskToProbabilityMat(result.pixelBuffer, targetWidth,
+                                                    targetHeight, outProb, error);
       CVPixelBufferRelease(inputBuffer);
+      return copied;
+    } @catch (NSException *exception) {
+      CVPixelBufferRelease(inputBuffer);
+      error = std::string("Vision pipeline ObjC exception: ") +
+              exception.name.UTF8String + " - " +
+              exception.reason.UTF8String;
       return false;
     }
-
-    VNPixelBufferObservation *result = impl_->request_.results.firstObject;
-    if (result == nil) {
-      error = "Vision request returned no segmentation result";
-      CVPixelBufferRelease(inputBuffer);
-      return false;
-    }
-
-    const bool copied = copyMaskToProbabilityMat(result.pixelBuffer, targetWidth,
-                                                 targetHeight, outProb, error);
-    CVPixelBufferRelease(inputBuffer);
-    return copied;
   }
 }
 
@@ -254,76 +266,104 @@ bool SegmentationWorker::ApplePersonSegmentationHelper::generatePersonProbabilit
     error = "Native Apple video frame is invalid";
     return false;
   }
+  if (impl_->ciContext_ == nil) {
+    error = "CoreImage context is unavailable";
+    return false;
+  }
+  if (impl_->request_ == nil) {
+    error = "Vision request is unavailable";
+    return false;
+  }
 
   @autoreleasepool {
-    CVPixelBufferRef scaledBuffer =
-        impl_->scaledBufferForSize(targetWidth, targetHeight);
-    if (scaledBuffer == nullptr) {
-      error = "Failed to allocate scaled CVPixelBuffer for Vision request";
-      return false;
-    }
-
-    auto stageStart = std::chrono::steady_clock::now();
-    CIImage *sourceImage = [CIImage imageWithCVPixelBuffer:frame.pixelBuffer];
-    if (sourceImage == nil) {
-      error = "Failed to create CIImage from CVPixelBuffer";
-      return false;
-    }
-
-    if (normalizedCrop.width > 0.0f && normalizedCrop.height > 0.0f) {
-      const CGRect sourceExtent = sourceImage.extent;
-      float cropX = normalizedCrop.x;
-      if (frame.mirrored) {
-        cropX = 1.0f - normalizedCrop.x - normalizedCrop.width;
+    @try {
+      CVPixelBufferRef scaledBuffer =
+          impl_->scaledBufferForSize(targetWidth, targetHeight);
+      if (scaledBuffer == nullptr) {
+        error = "Failed to allocate scaled CVPixelBuffer for Vision request";
+        return false;
       }
-      const CGRect cropRect = CGRectMake(
-          cropX * CGRectGetWidth(sourceExtent),
-          normalizedCrop.y * CGRectGetHeight(sourceExtent),
-          normalizedCrop.width * CGRectGetWidth(sourceExtent),
-          normalizedCrop.height * CGRectGetHeight(sourceExtent));
-      sourceImage = [sourceImage imageByCroppingToRect:cropRect];
-    }
 
-    const CGRect sourceExtent = sourceImage.extent;
-    const CGFloat scaleX = static_cast<CGFloat>(targetWidth) / CGRectGetWidth(sourceExtent);
-    const CGFloat scaleY = static_cast<CGFloat>(targetHeight) / CGRectGetHeight(sourceExtent);
-    CIImage *scaledImage = [sourceImage imageByApplyingTransform:CGAffineTransformMakeScale(scaleX, scaleY)];
-    [impl_->ciContext_ render:scaledImage toCVPixelBuffer:scaledBuffer];
-    auto stageEnd = std::chrono::steady_clock::now();
-    scalePerf.addSample(elapsedMs(stageStart, stageEnd));
+      auto stageStart = std::chrono::steady_clock::now();
+      CIImage *sourceImage = [CIImage imageWithCVPixelBuffer:frame.pixelBuffer];
+      if (sourceImage == nil) {
+        error = "Failed to create CIImage from CVPixelBuffer";
+        return false;
+      }
 
-    stageStart = stageEnd;
-    NSError *nsError = nil;
-    const CGImagePropertyOrientation orientation =
-        frame.mirrored ? kCGImagePropertyOrientationUpMirrored
-                       : kCGImagePropertyOrientationUp;
-    VNImageRequestHandler *handler =
-        [[VNImageRequestHandler alloc] initWithCVPixelBuffer:scaledBuffer
-                                                 orientation:orientation
-                                                     options:@{}];
+      if (normalizedCrop.width > 0.0f && normalizedCrop.height > 0.0f) {
+        const CGRect sourceExtent = sourceImage.extent;
+        float cropX = normalizedCrop.x;
+        if (frame.mirrored) {
+          cropX = 1.0f - normalizedCrop.x - normalizedCrop.width;
+        }
+        const CGRect cropRect = CGRectMake(
+            cropX * CGRectGetWidth(sourceExtent),
+            normalizedCrop.y * CGRectGetHeight(sourceExtent),
+            normalizedCrop.width * CGRectGetWidth(sourceExtent),
+            normalizedCrop.height * CGRectGetHeight(sourceExtent));
+        sourceImage = [sourceImage imageByCroppingToRect:cropRect];
+        if (sourceImage == nil) {
+          error = "CIImage crop returned nil";
+          return false;
+        }
+      }
 
-    const BOOL success = [handler performRequests:@[ impl_->request_ ]
-                                            error:&nsError];
-    stageEnd = std::chrono::steady_clock::now();
-    requestPerf.addSample(elapsedMs(stageStart, stageEnd));
-    if (!success) {
-      error = nsError != nil ? nsError.localizedDescription.UTF8String
-                             : "Vision request failed";
+      const CGRect sourceExtent = sourceImage.extent;
+      if (CGRectIsEmpty(sourceExtent) || CGRectGetWidth(sourceExtent) <= 0.0 ||
+          CGRectGetHeight(sourceExtent) <= 0.0) {
+        error = "CIImage has empty extent after crop";
+        return false;
+      }
+      const CGFloat scaleX = static_cast<CGFloat>(targetWidth) / CGRectGetWidth(sourceExtent);
+      const CGFloat scaleY = static_cast<CGFloat>(targetHeight) / CGRectGetHeight(sourceExtent);
+      CIImage *scaledImage = [sourceImage imageByApplyingTransform:CGAffineTransformMakeScale(scaleX, scaleY)];
+      if (scaledImage == nil) {
+        error = "CIImage scale returned nil";
+        return false;
+      }
+      [impl_->ciContext_ render:scaledImage toCVPixelBuffer:scaledBuffer];
+      auto stageEnd = std::chrono::steady_clock::now();
+      scalePerf.addSample(elapsedMs(stageStart, stageEnd));
+
+      stageStart = stageEnd;
+      NSError *nsError = nil;
+      const CGImagePropertyOrientation orientation =
+          frame.mirrored ? kCGImagePropertyOrientationUpMirrored
+                         : kCGImagePropertyOrientationUp;
+      VNImageRequestHandler *handler =
+          [[VNImageRequestHandler alloc] initWithCVPixelBuffer:scaledBuffer
+                                                    orientation:orientation
+                                                        options:@{}];
+
+      const BOOL success = [handler performRequests:@[ impl_->request_ ]
+                                              error:&nsError];
+      stageEnd = std::chrono::steady_clock::now();
+      requestPerf.addSample(elapsedMs(stageStart, stageEnd));
+      if (!success) {
+        error = nsError != nil ? nsError.localizedDescription.UTF8String
+                               : "Vision request failed";
+        return false;
+      }
+
+      VNPixelBufferObservation *result = impl_->request_.results.firstObject;
+      if (result == nil) {
+        error = "Vision request returned no segmentation result";
+        return false;
+      }
+
+      stageStart = stageEnd;
+      const bool copied = copyMaskToProbabilityMat(result.pixelBuffer, targetWidth,
+                                                    targetHeight, outProb, error);
+      stageEnd = std::chrono::steady_clock::now();
+      copyPerf.addSample(elapsedMs(stageStart, stageEnd));
+      return copied;
+    } @catch (NSException *exception) {
+      error = std::string("Vision pipeline ObjC exception: ") +
+              exception.name.UTF8String + " - " +
+              exception.reason.UTF8String;
       return false;
     }
-
-    VNPixelBufferObservation *result = impl_->request_.results.firstObject;
-    if (result == nil) {
-      error = "Vision request returned no segmentation result";
-      return false;
-    }
-
-    stageStart = stageEnd;
-    const bool copied = copyMaskToProbabilityMat(result.pixelBuffer, targetWidth,
-                                                 targetHeight, outProb, error);
-    stageEnd = std::chrono::steady_clock::now();
-    copyPerf.addSample(elapsedMs(stageStart, stageEnd));
-    return copied;
   }
 }
 

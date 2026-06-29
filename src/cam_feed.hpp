@@ -60,7 +60,10 @@ public:
   /// Start continuous capture in this thread
   Q_INVOKABLE void startCaptureLoop();
 
-  /// Request that the capture loop exits.
+  /// Request that the capture loop exits (non-blocking; returns immediately).
+  /// Callers must coordinate the remainder of the shutdown sequence —
+  /// disconnect signals, shut down downstream workers, then quit/wait
+  /// the camera thread — exactly as documented in stopPipeline().
   void stopCaptureLoop();
 
   // Capture a setup frame using the same transforms as runtime output.

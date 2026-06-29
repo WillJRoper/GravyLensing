@@ -280,6 +280,27 @@ int main(int argc, char **argv) {
       bgTimer = nullptr;
     }
 
+    // ── Shutdown ordering contract ─────────────────────────────────
+    // The sequence below must be preserved:
+    //
+    // 1. stopCaptureLoop  – sets stopRequested_; the capture loop polls
+    //    this and exits on its own.  It returns without waiting, so the
+    //    camera thread may still be mid-emission for one last frame.
+    //    This is safe because frame→worker connections are DirectConnection
+    //    and the remaining steps gate work before teardown continues.
+    // 2. disconnect signals – prevents any *future* camera-thread
+    //    invocations of submitFrame / submitAppleFrame reaching the
+    //    segmentation worker after this point.
+    // 3. beginShutdown (BlockingQueuedConnection) – blocks the main
+    //    thread until the mask thread has set shuttingDown_ and cleared
+    //    all pending frame queues.  No queued drain should ever emit
+    //    maskReady after this returns.
+    // 4. deleteLater + thread quit/wait – defers object deletion to the
+    //    owner thread, then drains the event loop so those deletions
+    //    complete before the main thread touches any worker pointer.
+    //
+    // If BlockingQueuedConnection is ever relaxed to QueuedConnection,
+    // deleteLater could race with in-flight drain events.
     if (camFeed != nullptr) {
       camFeed->stopCaptureLoop();
     }

@@ -355,6 +355,11 @@ void SegmentationWorker::drainPendingAppleFrame() {
   static thread_local PerfLog perf("person-mask", 60);
 
   if (!enabled_ || !modelLoaded_ || latestMask_.empty()) {
+    // If we consumed a frame but are not ready to process it we must
+    // clear the drain-scheduled flag; otherwise submitAppleFrame will
+    // never schedule the next drain and the pipeline deadlocks.
+    std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
+    pendingAppleFrameDrainScheduled_ = false;
     return;
   }
 

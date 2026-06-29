@@ -142,6 +142,14 @@ if(APPLE)
   list(APPEND SOURCES src/metal_helper.mm)
   list(APPEND SOURCES src/avfoundation_camera.mm)
   list(APPEND SOURCES src/vision_segmentation_helper.mm)
+  # ARC is required for Objective-C object lifecycle management in the
+  # Vision and AVFoundation helpers.  Without it, autoreleased objects
+  # (CIContext, VNRequest, etc.) become dangling pointers.
+  set_source_files_properties(
+    src/metal_helper.mm
+    src/avfoundation_camera.mm
+    src/vision_segmentation_helper.mm
+    PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 endif()
 
 # ============================================================================

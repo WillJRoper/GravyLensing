@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -186,7 +187,7 @@ private:
 
   // Whether this worker should process frames.
   bool enabled_ = false;
-  bool shuttingDown_ = false;
+  std::atomic<bool> shuttingDown_{false};
 
   // ================== Member Function Prototypes ==================
 
