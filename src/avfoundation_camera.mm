@@ -185,11 +185,13 @@ bool AvFoundationCamera::open(std::string &error) {
       const FormatChoice best = chooseBestFormat(device);
       if (best.format != nil && best.range != nil) {
         device.activeFormat = best.format;
-        const double targetFps = best.fps;
-        CMTime duration = CMTimeMake(1, static_cast<int32_t>(std::round(targetFps)));
-        device.activeVideoMinFrameDuration = duration;
-        device.activeVideoMaxFrameDuration = duration;
-        impl_->fps_ = targetFps;
+        // Use the exact min/max frame duration from the chosen range
+        // rather than constructing CMTimeMake(1, round(fps)).  Some
+        // cameras (e.g. external displays) have non‑integer frame
+        // durations and reject approximations.
+        device.activeVideoMinFrameDuration = best.range.minFrameDuration;
+        device.activeVideoMaxFrameDuration = best.range.maxFrameDuration;
+        impl_->fps_ = best.range.maxFrameRate;
       }
       [device unlockForConfiguration];
     }
