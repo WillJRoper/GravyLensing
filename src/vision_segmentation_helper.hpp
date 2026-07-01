@@ -16,6 +16,7 @@ public:
   ~ApplePersonSegmentationHelper();
 
   bool isAvailable() const;
+  void setQualityMode(const std::string &qualityMode);
   bool generatePersonProbability(const cv::Mat &frame, int targetWidth,
                                  int targetHeight, cv::Mat &outProb,
                                  std::string &error);

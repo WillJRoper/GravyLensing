@@ -127,7 +127,16 @@ void refineSoftPersonMask(const cv::Mat &personProb, const cv::Mat &guidanceFram
   binaryMask.setTo(cv::Scalar(0));
 
   for (int label = 1; label < componentCount; ++label) {
-    if (stats.at<int>(label, cv::CC_STAT_AREA) < minBlobArea) {
+    const int x = stats.at<int>(label, cv::CC_STAT_LEFT);
+    const int y = stats.at<int>(label, cv::CC_STAT_TOP);
+    const int width = stats.at<int>(label, cv::CC_STAT_WIDTH);
+    const int height = stats.at<int>(label, cv::CC_STAT_HEIGHT);
+    const bool touchesBorder =
+        x == 0 || y == 0 || (x + width) >= binaryMask.cols ||
+        (y + height) >= binaryMask.rows;
+    const int effectiveMinBlobArea =
+        touchesBorder ? std::max(1, minBlobArea / 3) : minBlobArea;
+    if (stats.at<int>(label, cv::CC_STAT_AREA) < effectiveMinBlobArea) {
       continue;
     }
     cv::Mat componentMask = labels == label;
@@ -237,10 +246,12 @@ static void computePixelMedian(const std::vector<cv::Mat> &history,
  */
 SegmentationWorker::SegmentationWorker(const std::string &modelPath,
                                        int modelSize, int nthreads,
-                                       float temporalSmooth, float lowerRes)
+                                       float temporalSmooth, float lowerRes,
+                                       const std::string &qualityMode)
     : modelPath_(modelPath), fastW_(modelSize), fastH_(modelSize),
       nthreads_(nthreads), device_(pickDevice()),
-      temporalSmooth_(temporalSmooth), lowerRes_(lowerRes) {
+      lowerRes_(lowerRes), qualityMode_(qualityMode),
+      temporalSmooth_(temporalSmooth) {
 
   std::cout << "[SegmentationWorker] Initializing segmentation model...\n";
   std::cout << "[SegmentationWorker] Using device: " << device_ << "\n";
@@ -312,6 +323,11 @@ void SegmentationWorker::submitGuidanceFrame(const cv::Mat &frame) {
 
 #ifdef __APPLE__
 void SegmentationWorker::submitAppleFrame(const AppleVideoFrame &frame) {
+  submitAppleFrame(frame, cv::Mat());
+}
+
+void SegmentationWorker::submitAppleFrame(const AppleVideoFrame &frame,
+                                          const cv::Mat &guidanceFrame) {
   if (!frame.isValid() || shuttingDown_) {
     return;
   }
@@ -320,6 +336,7 @@ void SegmentationWorker::submitAppleFrame(const AppleVideoFrame &frame) {
   {
     std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
     pendingAppleFrame_ = frame;
+    pendingAppleGuidanceFrame_ = guidanceFrame.clone();
     if (!pendingAppleFrameDrainScheduled_) {
       pendingAppleFrameDrainScheduled_ = true;
       shouldSchedule = true;
@@ -375,11 +392,13 @@ void SegmentationWorker::drainPendingAppleFrame() {
   if (shuttingDown_) {
     std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
     pendingAppleFrame_ = AppleVideoFrame();
+    pendingAppleGuidanceFrame_.release();
     pendingAppleFrameDrainScheduled_ = false;
     return;
   }
 
   AppleVideoFrame frame;
+  cv::Mat guidanceFrame;
   {
     std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
     if (!pendingAppleFrame_.isValid()) {
@@ -387,7 +406,9 @@ void SegmentationWorker::drainPendingAppleFrame() {
       return;
     }
     frame = pendingAppleFrame_;
+    guidanceFrame = std::move(pendingAppleGuidanceFrame_);
     pendingAppleFrame_ = AppleVideoFrame();
+    pendingAppleGuidanceFrame_.release();
   }
 
   static thread_local PerfLog perf("person-mask", 60);
@@ -403,8 +424,9 @@ void SegmentationWorker::drainPendingAppleFrame() {
 
   try {
     const auto t0 = std::chrono::steady_clock::now();
-    detectPersonMask(frame);
-    emit maskReady(latestMask_.clone());
+    if (detectPersonMask(frame, guidanceFrame)) {
+      emit maskReady(latestMask_.clone());
+    }
     const auto t1 = std::chrono::steady_clock::now();
     perf.addSample(elapsedMs(t0, t1));
   } catch (const std::exception &e) {
@@ -443,6 +465,7 @@ void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
       std::make_unique<ApplePersonSegmentationHelper>();
   if (appleSegmentationHelper_ != nullptr &&
       appleSegmentationHelper_->isAvailable()) {
+    appleSegmentationHelper_->setQualityMode(qualityMode_);
     usingAppleVision_ = true;
     modelLoaded_ = true;
     qInfo() << "[SegmentationWorker] Using Vision person segmentation backend";
@@ -475,7 +498,7 @@ void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
 #endif
 }
 
-void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
+bool SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
   static thread_local PerfLog visionPerf("person-mask-vision", 60);
   static thread_local PerfLog resizePerf("person-mask-resize", 60);
   static thread_local PerfLog colorPerf("person-mask-color", 60);
@@ -491,7 +514,7 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
 
 #ifdef __APPLE__
   if (usingAppleVision_ && appleSegmentationHelper_ != nullptr) {
-    return;
+    return false;
   }
 #endif
 
@@ -560,7 +583,7 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
     logits = out_iv.toGenericDict().at("out").toTensor();
   else {
     std::cerr << "[SegmentationWorker] Bad IValue\n";
-    return;
+    return false;
   }
 
   // Bring logits back to CPU, pick class
@@ -611,7 +634,7 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
     logits = out_iv.toGenericDict().at("out").toTensor();
   else {
     std::cerr << "Unexpected IValue from segmentation\n";
-    return;
+    return false;
   }
 
   // Convert logits → class map
@@ -638,8 +661,16 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
   } else {
     blendProb = newPersonProb;
   }
-  blendProb.copyTo(prevPersonProb_);
-  havePrevProb_ = true;
+  if (!havePrevProb_) {
+    blendProb.copyTo(prevPersonProb_);
+    havePrevProb_ = true;
+  } else {
+    adaptiveTemporalBlend(blendProb, prevPersonProb_, adaptiveAlpha_,
+                          motionProbDelta_, uncertaintyBand_,
+                          1.0f - temporalSmooth_, temporalMinAlpha_,
+                          temporalMaxAlpha_, personOnThreshold_,
+                          personOffThreshold_);
+  }
 
   refineSoftPersonMask(prevPersonProb_, frame, refinedPersonProb_, fastMask_,
                        personOnThreshold_, personOffThreshold_, minBlobArea);
@@ -651,10 +682,12 @@ void SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
              cv::INTER_NEAREST);
   stageEnd = std::chrono::steady_clock::now();
   upscalePerf.addSample(elapsedMs(stageStart, stageEnd));
+  return true;
 }
 
 #ifdef __APPLE__
-void SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame) {
+bool SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame,
+                                          const cv::Mat &guidanceFrame) {
   static thread_local PerfLog visionPerf("person-mask-vision", 60);
   static thread_local PerfLog cleanupPerf("person-mask-cleanup", 60);
   static thread_local PerfLog upscalePerf("person-mask-upscale", 60);
@@ -706,7 +739,7 @@ void SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame) {
   if (!ok) {
     std::cerr << "[SegmentationWorker] Vision segmentation failed: " << error
               << "\n";
-    return;
+    return false;
   }
 
   if (shouldUseROI) {
@@ -731,12 +764,6 @@ void SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame) {
   visionPerf.addSample(elapsedMs(stageStart, stageEnd));
 
   stageStart = stageEnd;
-  cv::Mat guidanceFrame;
-  {
-    std::lock_guard<std::mutex> lock(guidanceFrameMutex_);
-    guidanceFrame = latestGuidanceFrame_.clone();
-  }
-
   probHistory_[probHistoryWriteIdx_++] = newPersonProb.clone();
   if (probHistoryWriteIdx_ == kMedianWindow) probHistoryWriteIdx_ = 0;
   if (probHistoryCount_ < kMedianWindow) ++probHistoryCount_;
@@ -747,8 +774,16 @@ void SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame) {
   } else {
     blendProb = newPersonProb;
   }
-  blendProb.copyTo(prevPersonProb_);
-  havePrevProb_ = true;
+  if (!havePrevProb_) {
+    blendProb.copyTo(prevPersonProb_);
+    havePrevProb_ = true;
+  } else {
+    adaptiveTemporalBlend(blendProb, prevPersonProb_, adaptiveAlpha_,
+                          motionProbDelta_, uncertaintyBand_,
+                          1.0f - temporalSmooth_, temporalMinAlpha_,
+                          temporalMaxAlpha_, personOnThreshold_,
+                          personOffThreshold_);
+  }
 
   refineSoftPersonMask(prevPersonProb_, guidanceFrame, refinedPersonProb_,
                        fastMask_,
@@ -761,6 +796,7 @@ void SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame) {
              cv::INTER_NEAREST);
   stageEnd = std::chrono::steady_clock::now();
   upscalePerf.addSample(elapsedMs(stageStart, stageEnd));
+  return true;
 }
 #endif
 
@@ -804,10 +840,10 @@ void SegmentationWorker::onFrame(const cv::Mat &frame) {
     const auto t0 = std::chrono::steady_clock::now();
 
     // Detect the person mask in the current frame
-    detectPersonMask(frame);
-
-    // Emit the mask ready signal
-    emit maskReady(latestMask_.clone());
+    if (detectPersonMask(frame)) {
+      // Emit the mask ready signal
+      emit maskReady(latestMask_.clone());
+    }
 
     const auto t1 = std::chrono::steady_clock::now();
     perf.addSample(
@@ -837,6 +873,7 @@ void SegmentationWorker::beginShutdown() {
   {
     std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
     pendingAppleFrame_ = AppleVideoFrame();
+    pendingAppleGuidanceFrame_.release();
     pendingAppleFrameDrainScheduled_ = false;
   }
 #endif

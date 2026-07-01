@@ -49,6 +49,7 @@ public:
   int modelSize;
   float temporalSmooth;
   float lowerRes;
+  std::string qualityMode;
   int secondsPerBackground;
   bool distortInside;
   bool flip;
@@ -149,6 +150,12 @@ public:
         "Lower resolution factor for the lensing effect (float, default=0.5).",
         "lowerRes", QString::number(defaults.lowerRes));
     parser.addOption(lowerResOption);
+
+    QCommandLineOption qualityModeOption(
+        QStringList() << "quality" << "qualityMode",
+        "Quality preset for person mode: fast, balanced, high, or custom.",
+        "qualityMode", QString::fromStdString(defaults.qualityMode));
+    parser.addOption(qualityModeOption);
 
     // secondsPerBackground <int> (default -1, i.e infinite)
     QCommandLineOption secondsPerBackgroundOption(
@@ -269,6 +276,13 @@ public:
     opts.lowerRes = parser.value(lowerResOption).toFloat(&ok);
     if (!ok) {
       std::cerr << "Error: --lowerRes must be a float.\n";
+      std::exit(-1);
+    }
+
+    opts.qualityMode = parser.value(qualityModeOption).trimmed().toLower().toStdString();
+    if (opts.qualityMode != "fast" && opts.qualityMode != "balanced" &&
+        opts.qualityMode != "high" && opts.qualityMode != "custom") {
+      std::cerr << "Error: --qualityMode must be one of fast, balanced, high, or custom.\n";
       std::exit(-1);
     }
 

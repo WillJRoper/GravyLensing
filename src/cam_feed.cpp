@@ -389,7 +389,9 @@ void CameraFeed::startCaptureLoop() {
     } else {
       emit frameCaptured(frame.clone());
 #ifdef __APPLE__
-      emit nativeFrameCaptured(AppleVideoFrame(nativeFrame.pixelBuffer, flip_));
+      AppleVideoFrame emittedNativeFrame(nativeFrame.pixelBuffer, flip_);
+      emit nativeFrameCaptured(emittedNativeFrame);
+      emit framePairCaptured(frame, emittedNativeFrame);
 #endif
     }
 

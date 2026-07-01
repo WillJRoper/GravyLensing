@@ -99,6 +99,8 @@ signals:
 
 #ifdef __APPLE__
   void nativeFrameCaptured(const AppleVideoFrame &frame);
+  void framePairCaptured(const cv::Mat &frame,
+                         const AppleVideoFrame &nativeFrame);
 #endif
 
   /// Emitted if there's an error opening or reading the camera

@@ -62,7 +62,8 @@ public:
   // Constructor
   SegmentationWorker(const std::string &modelPath, int modelSize = 512,
                      int nthreads = 1, float temporalSmooth = 0.6f,
-                     float lowerRes = 1.0f);
+                     float lowerRes = 1.0f,
+                     const std::string &qualityMode = "balanced");
   ~SegmentationWorker();
 
   // Check loaded model
@@ -75,6 +76,8 @@ public:
 
 #ifdef __APPLE__
   void submitAppleFrame(const AppleVideoFrame &frame);
+  void submitAppleFrame(const AppleVideoFrame &frame,
+                        const cv::Mat &guidanceFrame);
 #endif
 
   // Whether this worker should process incoming frames.
@@ -125,6 +128,7 @@ private:
   // macOS-native Vision backend, preferred when available.
   std::unique_ptr<ApplePersonSegmentationHelper> appleSegmentationHelper_;
   bool usingAppleVision_ = false;
+  std::string qualityMode_;
 
   // Dimensions for the model
   int fastW_, fastH_;
@@ -204,9 +208,10 @@ private:
   // ================== Member Function Prototypes ==================
 
   // Detect the person mask in the current frame using a segmentation model.
-  void detectPersonMask(const cv::Mat &frame);
+  bool detectPersonMask(const cv::Mat &frame);
 #ifdef __APPLE__
-  void detectPersonMask(const AppleVideoFrame &frame);
+  bool detectPersonMask(const AppleVideoFrame &frame,
+                        const cv::Mat &guidanceFrame);
 #endif
 
   // Set up the segmentation model
@@ -226,6 +231,7 @@ private:
 #ifdef __APPLE__
   std::mutex pendingAppleFrameMutex_;
   AppleVideoFrame pendingAppleFrame_;
+  cv::Mat pendingAppleGuidanceFrame_;
   bool pendingAppleFrameDrainScheduled_ = false;
 #endif
 };

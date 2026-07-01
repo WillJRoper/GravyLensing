@@ -180,6 +180,26 @@ bool SegmentationWorker::ApplePersonSegmentationHelper::isAvailable() const {
   return impl_ != nullptr && impl_->available_;
 }
 
+void SegmentationWorker::ApplePersonSegmentationHelper::setQualityMode(
+    const std::string &qualityMode) {
+  if (impl_ == nullptr || impl_->request_ == nil) {
+    return;
+  }
+
+  if (@available(macOS 11.0, *)) {
+    if (qualityMode == "fast") {
+      impl_->request_.qualityLevel =
+          VNGeneratePersonSegmentationRequestQualityLevelFast;
+    } else if (qualityMode == "high") {
+      impl_->request_.qualityLevel =
+          VNGeneratePersonSegmentationRequestQualityLevelAccurate;
+    } else {
+      impl_->request_.qualityLevel =
+          VNGeneratePersonSegmentationRequestQualityLevelBalanced;
+    }
+  }
+}
+
 bool SegmentationWorker::ApplePersonSegmentationHelper::generatePersonProbability(
     const cv::Mat &frame, int targetWidth, int targetHeight, cv::Mat &outProb,
     std::string &error) {

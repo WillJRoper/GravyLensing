@@ -31,6 +31,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSignalBlocker>
 #include <QScrollArea>
 #include <QSlider>
 #include <QSizePolicy>
@@ -277,6 +278,22 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   addFormRow(personForm, "Model size", modelSizeSpin_->toolTip(),
              modelSizeSpin_);
 
+  qualityModeCombo_ = new QComboBox;
+  qualityModeCombo_->setToolTip(
+      "Preset tradeoff for the Vision request quality, segmentation working "
+      "resolution, temporal stabilization, and lens mass softening.");
+  qualityModeCombo_->addItem("Fast", "fast");
+  qualityModeCombo_->addItem("Balanced", "balanced");
+  qualityModeCombo_->addItem("High Quality", "high");
+  qualityModeCombo_->addItem("Custom", "custom");
+  {
+    const int idx = qualityModeCombo_->findData(
+        QString::fromStdString(settings.qualityMode));
+    qualityModeCombo_->setCurrentIndex(idx >= 0 ? idx : 1);
+  }
+  addFormRow(personForm, "Quality mode", qualityModeCombo_->toolTip(),
+             qualityModeCombo_);
+
   temporalSmoothSpin_ = makeDoubleSpin(0.0, 1.0, 0.05, 2, {},
       "Higher values blend the mask more heavily with the previous frame, "
       "reducing flicker at the cost of responsiveness.");
@@ -285,6 +302,62 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
              temporalSmoothSpin_);
 
   leftColumn->addWidget(personGroup);
+
+  const auto applyQualityPreset = [this](const QString &mode) {
+    if (mode == QLatin1String("fast")) {
+      modelSizeSpin_->setValue(256);
+      temporalSmoothSpin_->setValue(0.18);
+      lowerResSpin_->setValue(0.40);
+    } else if (mode == QLatin1String("balanced")) {
+      modelSizeSpin_->setValue(512);
+      temporalSmoothSpin_->setValue(0.25);
+      lowerResSpin_->setValue(0.50);
+    } else if (mode == QLatin1String("high")) {
+      modelSizeSpin_->setValue(640);
+      temporalSmoothSpin_->setValue(0.35);
+      lowerResSpin_->setValue(0.75);
+    }
+  };
+
+  const auto syncQualityModeFromControls = [this]() {
+    const auto roughlyEqual = [](double a, double b) {
+      return std::abs(a - b) < 0.01;
+    };
+    QString mode = "custom";
+    if (modelSizeSpin_->value() == 256 &&
+        roughlyEqual(temporalSmoothSpin_->value(), 0.18) &&
+        roughlyEqual(lowerResSpin_->value(), 0.40)) {
+      mode = "fast";
+    } else if (modelSizeSpin_->value() == 512 &&
+               roughlyEqual(temporalSmoothSpin_->value(), 0.25) &&
+               roughlyEqual(lowerResSpin_->value(), 0.50)) {
+      mode = "balanced";
+    } else if (modelSizeSpin_->value() == 640 &&
+               roughlyEqual(temporalSmoothSpin_->value(), 0.35) &&
+               roughlyEqual(lowerResSpin_->value(), 0.75)) {
+      mode = "high";
+    }
+    const int idx = qualityModeCombo_->findData(mode);
+    if (idx >= 0 && qualityModeCombo_->currentIndex() != idx) {
+      QSignalBlocker blocker(qualityModeCombo_);
+      qualityModeCombo_->setCurrentIndex(idx);
+    }
+  };
+
+  connect(qualityModeCombo_, &QComboBox::currentIndexChanged, this,
+          [this, applyQualityPreset](int) {
+            const QString mode = qualityModeCombo_->currentData().toString();
+            if (mode == QLatin1String("custom")) {
+              return;
+            }
+            applyQualityPreset(mode);
+          });
+  connect(modelSizeSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+          [syncQualityModeFromControls](int) { syncQualityModeFromControls(); });
+  connect(temporalSmoothSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
+          this, [syncQualityModeFromControls](double) {
+            syncQualityModeFromControls();
+          });
 
   // ── Color Detection (subtype + tolerances) ─────────────────────────
   auto *colorGroup = new QGroupBox("Color Detection");
@@ -408,6 +481,10 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
               const int scaled = static_cast<int>(std::round(value * 100.0));
               if (lowerResSlider->value() != scaled)
                 lowerResSlider->setValue(scaled);
+            });
+    connect(lowerResSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
+            this, [syncQualityModeFromControls](double) {
+              syncQualityModeFromControls();
             });
 
     addFormRow(lensForm, "Resolution scale", lowerResSpin_->toolTip(), row);
@@ -546,6 +623,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             modelPathEdit_->setText(
                 QString::fromStdString(defaults.modelPath));
             modelSizeSpin_->setValue(defaults.modelSize);
+            { const int idx = qualityModeCombo_->findData(QString::fromStdString(defaults.qualityMode)); if (idx >= 0) qualityModeCombo_->setCurrentIndex(idx); }
             temporalSmoothSpin_->setValue(
                 static_cast<double>(defaults.temporalSmooth));
             strengthSpin_->setValue(
@@ -595,6 +673,7 @@ AppSettings SettingsDialog::settings() const {
   s.colorSatTol = colorSatTolSpin_->value();
   s.colorValTol = colorValTolSpin_->value();
   s.modelSize = modelSizeSpin_->value();
+  s.qualityMode = qualityModeCombo_->currentData().toString().toStdString();
   s.strength = static_cast<float>(strengthSpin_->value());
   s.softening = static_cast<float>(softeningSpin_->value());
   s.padFactor = padFactorSpin_->value();

@@ -180,6 +180,12 @@ int main(int argc, char **argv) {
   QSettings savedSettings;
   AppSettings appSettings;
   appSettings.load(savedSettings);
+  const int settingsVersion = savedSettings.value("settingsVersion", 0).toInt();
+  if (settingsVersion < 1) {
+    appSettings.flip = false;
+    savedSettings.setValue("flip", false);
+    savedSettings.setValue("settingsVersion", 1);
+  }
 
   CommandLineOptions opts = CommandLineOptions::parse(app, appSettings);
   appSettings.nthreads = opts.nthreads;
@@ -192,6 +198,7 @@ int main(int argc, char **argv) {
   appSettings.modelSize = opts.modelSize;
   appSettings.temporalSmooth = opts.temporalSmooth;
   appSettings.lowerRes = opts.lowerRes;
+  appSettings.qualityMode = opts.qualityMode;
   appSettings.secondsPerBackground = opts.secondsPerBackground;
   appSettings.distortInside = opts.distortInside;
   appSettings.flip = opts.flip;
@@ -252,7 +259,6 @@ int main(int argc, char **argv) {
   QMetaObject::Connection frameToColorConnection;
 #ifdef __APPLE__
   QMetaObject::Connection frameToAppleSegConnection;
-  QMetaObject::Connection frameToSegGuidanceConnection;
 #endif
   bool personModeAvailable = false;
   ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
@@ -313,8 +319,6 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
     if (frameToAppleSegConnection)
       QObject::disconnect(frameToAppleSegConnection);
-    if (frameToSegGuidanceConnection)
-      QObject::disconnect(frameToSegGuidanceConnection);
 #endif
 
     if (segWorker != nullptr) {
@@ -364,7 +368,6 @@ int main(int argc, char **argv) {
     frameToColorConnection = QMetaObject::Connection();
 #ifdef __APPLE__
     frameToAppleSegConnection = QMetaObject::Connection();
-    frameToSegGuidanceConnection = QMetaObject::Connection();
 #endif
   };
 
@@ -394,10 +397,13 @@ int main(int argc, char **argv) {
     }
 
     const int nfftThreads = std::max(1, activeSettings.nthreads - 3);
+    const AppSettings effectiveSettings = activeSettings.withQualityModeApplied();
     SegmentationWorker *newSegWorker =
-        new SegmentationWorker(activeSettings.modelPath, activeSettings.modelSize,
-                               nfftThreads, activeSettings.temporalSmooth,
-                               activeSettings.lowerRes);
+        new SegmentationWorker(effectiveSettings.modelPath,
+                               effectiveSettings.modelSize, nfftThreads,
+                               effectiveSettings.temporalSmooth,
+                               effectiveSettings.lowerRes,
+                               effectiveSettings.visionQualityMode());
     if (!newSegWorker->isModelLoaded()) {
       reportError("Failed to load segmentation model from " +
                   activeSettings.modelPath);
@@ -420,6 +426,7 @@ int main(int argc, char **argv) {
   const auto startPipeline = [&](const AppSettings &settings,
                                  const SessionSelections &selections,
                                  bool isReconfigure = false) -> bool {
+    const AppSettings effectiveSettings = settings.withQualityModeApplied();
     const int nfftThreads = std::max(1, settings.nthreads - 3);
     fftwf_plan_with_nthreads(nfftThreads);
 
@@ -437,10 +444,12 @@ int main(int argc, char **argv) {
     SegmentationWorker *newSegWorker = nullptr;
     bool newPersonModeAvailable = false;
     if (settings.maskMode == "person") {
-      newSegWorker = new SegmentationWorker(settings.modelPath,
-                                            settings.modelSize, nfftThreads,
-                                            settings.temporalSmooth,
-                                            settings.lowerRes);
+      newSegWorker = new SegmentationWorker(effectiveSettings.modelPath,
+                                            effectiveSettings.modelSize,
+                                            nfftThreads,
+                                            effectiveSettings.temporalSmooth,
+                                            effectiveSettings.lowerRes,
+                                            effectiveSettings.visionQualityMode());
       newPersonModeAvailable = newSegWorker->isModelLoaded();
       if (!newPersonModeAvailable) {
         reportError("Failed to load segmentation model from " +
@@ -453,7 +462,8 @@ int main(int argc, char **argv) {
 
     // Colour mode is always started without an automatic picker.  The user
     // explicitly chooses/re-chooses the target via menu or key binding.
-    ColorMaskWorker *newColorWorker = new ColorMaskWorker(settings.lowerRes);
+    ColorMaskWorker *newColorWorker =
+        new ColorMaskWorker(effectiveSettings.lowerRes);
 
     if (selections.hasColorTarget) {
       newColorWorker->applyReselectionTarget(selections.hue, selections.sat,
@@ -467,8 +477,9 @@ int main(int argc, char **argv) {
 
     LensingWorker *newLensWorker =
         new LensingWorker(settings.strength, settings.softening,
-                          settings.padFactor, nfftThreads, settings.lowerRes,
-                          settings.distortInside);
+                          settings.padFactor, nfftThreads,
+                          effectiveSettings.lowerRes, settings.distortInside,
+                          effectiveSettings.lensMassBlurSigma());
 
     QThread *newMaskThread = new QThread;
     QThread *newLensThread = new QThread;
@@ -623,23 +634,16 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
       if (frameToAppleSegConnection)
         QObject::disconnect(frameToAppleSegConnection);
-      if (frameToSegGuidanceConnection)
-        QObject::disconnect(frameToSegGuidanceConnection);
 #endif
 
       if (enablePerson && segWorker != nullptr) {
 #ifdef __APPLE__
         if (segWorker->usesAppleVision()) {
-          frameToSegGuidanceConnection = QObject::connect(
-              camFeed, &CameraFeed::frameCaptured, segWorker,
-              [segWorker](const cv::Mat &frame) {
-                segWorker->submitGuidanceFrame(frame);
-              },
-              Qt::DirectConnection);
           frameToAppleSegConnection = QObject::connect(
-              camFeed, &CameraFeed::nativeFrameCaptured, segWorker,
-              [segWorker](const AppleVideoFrame &frame) {
-                segWorker->submitAppleFrame(frame);
+              camFeed, &CameraFeed::framePairCaptured, segWorker,
+              [segWorker](const cv::Mat &frame,
+                          const AppleVideoFrame &nativeFrame) {
+                segWorker->submitAppleFrame(nativeFrame, frame);
               },
               Qt::DirectConnection);
         } else {

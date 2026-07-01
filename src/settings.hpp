@@ -62,6 +62,7 @@ struct AppSettings {
   std::string modelPath = "models/lraspp_torchscript-traced_float32_512_512.pt";
   int modelSize = 512;          // Segmentation model input size (px)
   float temporalSmooth = 0.25f; // Frame blending factor (0–1)
+  std::string qualityMode = "balanced"; // fast, balanced, high, custom
 
   // ── Runtime ────────────────────────────────────────────────────────
   bool debugGrid = false;       // Show 2x2 diagnostic view
@@ -75,6 +76,7 @@ struct AppSettings {
            fps == other.fps && debugGrid == other.debugGrid && padFactor == other.padFactor &&
            modelSize == other.modelSize &&
            temporalSmooth == other.temporalSmooth &&
+           qualityMode == other.qualityMode &&
            lowerRes == other.lowerRes &&
            secondsPerBackground == other.secondsPerBackground &&
            distortInside == other.distortInside && flip == other.flip &&
@@ -98,6 +100,8 @@ struct AppSettings {
     padFactor = s.value("padFactor", padFactor).toInt();
     modelSize = s.value("modelSize", modelSize).toInt();
     temporalSmooth = s.value("temporalSmooth", temporalSmooth).toFloat();
+    qualityMode =
+        s.value("qualityMode", QString::fromStdString(qualityMode)).toString().toStdString();
     lowerRes = s.value("lowerRes", lowerRes).toFloat();
     secondsPerBackground =
         s.value("secondsPerBackground", secondsPerBackground).toInt();
@@ -131,6 +135,7 @@ struct AppSettings {
     s.setValue("padFactor", padFactor);
     s.setValue("modelSize", modelSize);
     s.setValue("temporalSmooth", temporalSmooth);
+    s.setValue("qualityMode", QString::fromStdString(qualityMode));
     s.setValue("lowerRes", lowerRes);
     s.setValue("secondsPerBackground", secondsPerBackground);
     s.setValue("distortInside", distortInside);
@@ -143,5 +148,39 @@ struct AppSettings {
     s.setValue("colorValTol", colorValTol);
     s.setValue("backgroundsDir", QString::fromStdString(backgroundsDir));
     s.setValue("modelPath", QString::fromStdString(modelPath));
+  }
+
+  AppSettings withQualityModeApplied() const {
+    AppSettings tuned = *this;
+    if (qualityMode == "fast") {
+      tuned.modelSize = 256;
+      tuned.temporalSmooth = 0.18f;
+      tuned.lowerRes = 0.40f;
+    } else if (qualityMode == "high") {
+      tuned.modelSize = 640;
+      tuned.temporalSmooth = 0.35f;
+      tuned.lowerRes = 0.75f;
+    } else if (qualityMode == "balanced") {
+      tuned.modelSize = 512;
+      tuned.temporalSmooth = 0.25f;
+      tuned.lowerRes = 0.50f;
+    }
+    return tuned;
+  }
+
+  float lensMassBlurSigma() const {
+    if (qualityMode == "fast")
+      return 1.0f;
+    if (qualityMode == "high")
+      return 2.0f;
+    return 1.5f;
+  }
+
+  std::string visionQualityMode() const {
+    if (qualityMode == "fast")
+      return "fast";
+    if (qualityMode == "high")
+      return "accurate";
+    return "balanced";
   }
 };

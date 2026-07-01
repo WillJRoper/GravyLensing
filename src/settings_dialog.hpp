@@ -96,6 +96,7 @@ private:
   QSpinBox *modelSizeSpin_;
   QSpinBox *deviceIndexSpin_;
   QComboBox *fpsCombo_;
+  QComboBox *qualityModeCombo_;
   QCheckBox *debugGridCheck_;
   QSpinBox *padFactorSpin_;
   QDoubleSpinBox *temporalSmoothSpin_;

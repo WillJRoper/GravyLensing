@@ -208,6 +208,27 @@ void fillPaddedMaskReflect101(const cv::Mat &mask, float *dst, int padHeight,
   }
 }
 
+void fillPaddedMassReflect101(const cv::Mat &mass, float *dst, int padHeight,
+                              int padWidth, int nthreads) {
+  const int srcHeight = mass.rows;
+  const int srcWidth = mass.cols;
+  const int top = (padHeight - srcHeight) / 2;
+  const int left = (padWidth - srcWidth) / 2;
+
+#pragma omp parallel for num_threads(nthreads) schedule(static)
+  for (int y = 0; y < padHeight; ++y) {
+    const int srcY = cv::borderInterpolate(y - top, srcHeight,
+                                           cv::BORDER_REFLECT_101);
+    const float *srcRow = mass.ptr<float>(srcY);
+    float *dstRow = dst + static_cast<size_t>(y) * padWidth;
+    for (int x = 0; x < padWidth; ++x) {
+      const int srcX = cv::borderInterpolate(x - left, srcWidth,
+                                             cv::BORDER_REFLECT_101);
+      dstRow[x] = srcRow[srcX];
+    }
+  }
+}
+
 } // namespace
 
 /**
@@ -222,9 +243,11 @@ void fillPaddedMaskReflect101(const cv::Mat &mask, float *dst, int padHeight,
  *   smaller than the background resolution.
  */
 LensingWorker::LensingWorker(float strength, float softening, int padFactor,
-                             int nthreads, float lowerRes, bool distortInside)
+                             int nthreads, float lowerRes, bool distortInside,
+                             float massBlurSigma)
     : strength_(strength), softening_(softening), padFactor_(padFactor),
-      nthreads_(nthreads), lowerRes_(lowerRes), distortInside_(distortInside) {
+      nthreads_(nthreads), lowerRes_(lowerRes), distortInside_(distortInside),
+      massBlurSigma_(massBlurSigma) {
 
   std::cout << "[LensingWorker] Initializing lensing worker...\n";
   std::cout << "[LensingWorker] Strength: " << strength_ << "\n";
@@ -234,6 +257,7 @@ LensingWorker::LensingWorker(float strength, float softening, int padFactor,
       << "[LensingWorker] Number of threads (excluding those taken by Qt): "
       << nthreads_ << "\n";
   std::cout << "[LensingWorker] Lower resolution factor: " << lowerRes_ << "\n";
+  std::cout << "[LensingWorker] Mass blur sigma: " << massBlurSigma_ << "\n";
 }
 
 void LensingWorker::submitMask(const cv::Mat &mask) {
@@ -504,7 +528,12 @@ void LensingWorker::applyLensing(const cv::Mat &mask) {
   const int N2 = pH * pW;  // real samples per deflection
 
   const auto tPad0 = std::chrono::steady_clock::now();
-  fillPaddedMaskReflect101(mask, maskBuf_, pH, pW, nthreads_);
+  mask.convertTo(softMassMask_, CV_32F, 1.0f / 255.0f);
+  if (massBlurSigma_ > 0.0f) {
+    cv::GaussianBlur(softMassMask_, softMassMask_, cv::Size(0, 0),
+                     massBlurSigma_, massBlurSigma_, cv::BORDER_REPLICATE);
+  }
+  fillPaddedMassReflect101(softMassMask_, maskBuf_, pH, pW, nthreads_);
   const auto tPad1 = std::chrono::steady_clock::now();
   perfPad.addSample(
       std::chrono::duration<double, std::milli>(tPad1 - tPad0).count());
