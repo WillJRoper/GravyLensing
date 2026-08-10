@@ -356,7 +356,13 @@ void CameraFeed::startCaptureLoop() {
 
     // Capture a frame from the camera
 #ifdef __APPLE__
-    if (!avCamera_->waitForFrame(frame, nativeFrame, 500, &stopRequested_)) {
+    const bool needsPreviewFrame = previewEnabled_.load() || doingROI_.load();
+    const bool captureOk = needsPreviewFrame
+                               ? avCamera_->waitForFrame(frame, nativeFrame, 500,
+                                                        &stopRequested_)
+                               : avCamera_->waitForNativeFrame(nativeFrame, 500,
+                                                               &stopRequested_);
+    if (!captureOk) {
       emit captureError("Frame capture failed");
       std::cout << "[CameraFeed] Frame capture failed\n";
       break;
@@ -370,7 +376,7 @@ void CameraFeed::startCaptureLoop() {
 #endif
 
     // Flip the frame horizontally if requested
-    if (flip_) {
+    if (!frame.empty() && flip_) {
       cv::flip(frame, frame, 1);
     }
 
@@ -387,7 +393,9 @@ void CameraFeed::startCaptureLoop() {
       emit frameCaptured(
           applyROIMaskAndCrop(frame, mask, rect).clone());
     } else {
-      emit frameCaptured(frame.clone());
+      if (!frame.empty()) {
+        emit frameCaptured(frame.clone());
+      }
 #ifdef __APPLE__
       AppleVideoFrame emittedNativeFrame(nativeFrame.pixelBuffer, flip_);
       emit nativeFrameCaptured(emittedNativeFrame);

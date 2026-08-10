@@ -26,6 +26,9 @@ public:
   bool waitForFrame(cv::Mat &frame, int timeoutMs,
                     const std::atomic<bool> *stopRequested = nullptr);
   bool latestFrame(cv::Mat &frame) const;
+  bool waitForNativeFrame(AppleVideoFrame &nativeFrame, int timeoutMs,
+                          const std::atomic<bool> *stopRequested = nullptr);
+  bool latestNativeFrame(AppleVideoFrame &nativeFrame) const;
   bool waitForFrame(cv::Mat &frame, AppleVideoFrame &nativeFrame, int timeoutMs,
                     const std::atomic<bool> *stopRequested = nullptr);
   bool latestFrame(cv::Mat &frame, AppleVideoFrame &nativeFrame) const;

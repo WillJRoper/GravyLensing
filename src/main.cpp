@@ -263,6 +263,7 @@ int main(int argc, char **argv) {
   bool personModeAvailable = false;
   ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
   std::function<void(ActiveMaskMode)> setActiveMaskMode;
+  std::function<void()> updatePreviewPolicy;
 
   const auto saveSessionSelections = [&](QSettings &settings) {
     settings.setValue("session/hasColorTarget", sessionSelections.hasColorTarget);
@@ -369,6 +370,7 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
     frameToAppleSegConnection = QMetaObject::Connection();
 #endif
+    updatePreviewPolicy = nullptr;
   };
 
   const auto attachPersonWorker = [&](SegmentationWorker *worker) {
@@ -618,6 +620,25 @@ int main(int argc, char **argv) {
     camThread = newCamThread;
     personModeAvailable = newPersonModeAvailable;
 
+    updatePreviewPolicy = [&]() {
+#ifdef __APPLE__
+      if (camFeed == nullptr) {
+        return;
+      }
+      const bool useNativeOnlyPersonPath =
+          activeMaskMode == ActiveMaskMode::Person && segWorker != nullptr &&
+          segWorker->usesAppleVision() && !activeSettings.debugGrid;
+      QMetaObject::invokeMethod(
+          camFeed,
+          [camFeed, enablePreview = !useNativeOnlyPersonPath]() {
+            if (camFeed) {
+              camFeed->setPreviewEnabled(enablePreview);
+            }
+          },
+          Qt::QueuedConnection);
+#endif
+    };
+
     setActiveMaskMode = [&](ActiveMaskMode mode) {
       activeMaskMode = mode;
       if (mode == ActiveMaskMode::Person && !ensurePersonWorkerLoaded()) {
@@ -686,6 +707,8 @@ int main(int argc, char **argv) {
 
       vp->setColorModeActive(enableColor);
       vp->setMaskModeLabel(mode == ActiveMaskMode::Color);
+      if (updatePreviewPolicy)
+        updatePreviewPolicy();
 
       if (enableColor && !sessionSelections.hasColorTarget) {
         std::cout << "[Main] Color mode active with no selected target. "
@@ -743,12 +766,15 @@ int main(int argc, char **argv) {
   // during an active session.
 
   QObject::connect(vp, &ViewPort::debugGridToggled, vp,
-                   [vp, &activeSettings, &saveSessionSelections](bool enabled) {
-                     vp->setDebugGridEnabled(enabled);
-                     vp->setDebugGridChecked(enabled);
-                     activeSettings.debugGrid = enabled;
-                     vp->setSettings(activeSettings);
-                     QSettings s;
+                   [vp, &activeSettings, &saveSessionSelections,
+                    &updatePreviewPolicy](bool enabled) {
+                      vp->setDebugGridEnabled(enabled);
+                      vp->setDebugGridChecked(enabled);
+                      activeSettings.debugGrid = enabled;
+                      vp->setSettings(activeSettings);
+                      if (updatePreviewPolicy)
+                        updatePreviewPolicy();
+                      QSettings s;
                      activeSettings.save(s);
                      saveSessionSelections(s);
                    });

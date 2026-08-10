@@ -195,6 +195,35 @@ cv::Rect paddedMaskBounds(const cv::Mat &mask, int padding, cv::Size limit) {
   return bounds;
 }
 
+cv::Rect paddedProbabilityBounds(const cv::Mat &probability, float threshold,
+                                 int padding, cv::Size limit) {
+  if (probability.empty()) {
+    return cv::Rect();
+  }
+
+  cv::Mat activeMask;
+  cv::threshold(probability, activeMask, threshold, 255.0, cv::THRESH_BINARY);
+  activeMask.convertTo(activeMask, CV_8U);
+  return paddedMaskBounds(activeMask, padding, limit);
+}
+
+float rectIoU(const cv::Rect &a, const cv::Rect &b) {
+  const cv::Rect intersection = a & b;
+  if (intersection.empty()) {
+    return 0.0f;
+  }
+  const float intersectionArea = static_cast<float>(intersection.area());
+  const float unionArea = static_cast<float>(a.area() + b.area() - intersection.area());
+  return unionArea > 0.0f ? intersectionArea / unionArea : 0.0f;
+}
+
+float meanProbabilityInRect(const cv::Mat &probability, const cv::Rect &roi) {
+  if (probability.empty() || roi.empty()) {
+    return 0.0f;
+  }
+  return static_cast<float>(cv::mean(probability(roi))[0]);
+}
+
 /// Per-pixel median of N float probability maps (N = 5).
 /// Simple insertion sort — fast for such a tiny fixed input.
 static void computePixelMedian(const std::vector<cv::Mat> &history,
@@ -701,16 +730,26 @@ bool SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame,
     newPersonProb = cv::Mat::zeros(fastH_, fastW_, CV_32F);
   }
   std::string error;
+  const bool enableVisionROIAcceleration =
+      qualityMode_ == "fast" || qualityMode_ == "balanced";
+  const cv::Mat &roiSourceProb = havePrevProb_ ? prevPersonProb_ : refinedPersonProb_;
 
   const cv::Size modelSize(fastW_, fastH_);
-  const cv::Rect suggestedROI =
-      paddedMaskBounds(fastMask_, visionROIPadding_, modelSize);
+  const cv::Rect suggestedROI = paddedProbabilityBounds(
+      roiSourceProb, 0.18f, visionROIPadding_, modelSize);
+  const float suggestedROIMeanProb = meanProbabilityInRect(roiSourceProb, suggestedROI);
+  const float suggestedROIIoU = currentVisionROI_.empty()
+                                    ? 1.0f
+                                    : rectIoU(suggestedROI, currentVisionROI_);
   const bool shouldUseROI =
-      enableVisionROIAcceleration_ &&
+      enableVisionROIAcceleration &&
       !suggestedROI.empty() &&
       static_cast<float>(suggestedROI.area()) /
               static_cast<float>(modelSize.area()) <
           visionMaxROIAreaFraction_ &&
+      suggestedROIMeanProb >= 0.12f &&
+      (currentVisionROI_.empty() || suggestedROIIoU >= 0.35f ||
+       visionROIStableFrames_ < 2) &&
       framesSinceVisionFullFrame_ < visionFullFrameInterval_;
 
   cv::Rect activeROI(0, 0, fastW_, fastH_);
@@ -718,7 +757,9 @@ bool SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame,
   int requestHeight = fastH_;
   cv::Rect2f normalizedCrop;
   if (shouldUseROI) {
-    activeROI = suggestedROI;
+    activeROI = currentVisionROI_.empty() ? suggestedROI
+                                          : (currentVisionROI_ | suggestedROI);
+    activeROI &= cv::Rect(0, 0, fastW_, fastH_);
     requestWidth = std::max(visionMinROIDim_, activeROI.width);
     requestHeight = std::max(visionMinROIDim_, activeROI.height);
     requestWidth = std::min(requestWidth, fastW_);
@@ -785,11 +826,31 @@ bool SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame,
                           personOffThreshold_);
   }
 
-  refineSoftPersonMask(prevPersonProb_, guidanceFrame, refinedPersonProb_,
+  const cv::Mat &activeGuidanceFrame = qualityMode_ == "fast"
+                                           ? cv::Mat()
+                                           : guidanceFrame;
+  refineSoftPersonMask(prevPersonProb_, activeGuidanceFrame, refinedPersonProb_,
                        fastMask_,
                        personOnThreshold_, personOffThreshold_, minBlobArea);
   stageEnd = std::chrono::steady_clock::now();
   cleanupPerf.addSample(elapsedMs(stageStart, stageEnd));
+
+  if (shouldUseROI) {
+    const cv::Rect refinedROI = paddedProbabilityBounds(
+        prevPersonProb_, 0.15f, visionROIPadding_, modelSize);
+    const float refinedMeanProb = meanProbabilityInRect(prevPersonProb_, activeROI);
+    if (refinedROI.empty() || refinedMeanProb < 0.08f) {
+      currentVisionROI_ = cv::Rect(0, 0, fastW_, fastH_);
+      framesSinceVisionFullFrame_ = visionFullFrameInterval_;
+      visionROIStableFrames_ = 0;
+    } else {
+      currentVisionROI_ = activeROI | refinedROI;
+      currentVisionROI_ &= cv::Rect(0, 0, fastW_, fastH_);
+      ++visionROIStableFrames_;
+    }
+  } else {
+    visionROIStableFrames_ = 0;
+  }
 
   stageStart = stageEnd;
   cv::resize(fastMask_, latestMask_, latestMask_.size(), 0, 0,

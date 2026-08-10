@@ -305,9 +305,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
 
   const auto applyQualityPreset = [this](const QString &mode) {
     if (mode == QLatin1String("fast")) {
-      modelSizeSpin_->setValue(256);
-      temporalSmoothSpin_->setValue(0.18);
-      lowerResSpin_->setValue(0.40);
+      modelSizeSpin_->setValue(224);
+      temporalSmoothSpin_->setValue(0.16);
+      lowerResSpin_->setValue(0.35);
     } else if (mode == QLatin1String("balanced")) {
       modelSizeSpin_->setValue(512);
       temporalSmoothSpin_->setValue(0.25);
@@ -324,9 +324,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
       return std::abs(a - b) < 0.01;
     };
     QString mode = "custom";
-    if (modelSizeSpin_->value() == 256 &&
-        roughlyEqual(temporalSmoothSpin_->value(), 0.18) &&
-        roughlyEqual(lowerResSpin_->value(), 0.40)) {
+    if (modelSizeSpin_->value() == 224 &&
+        roughlyEqual(temporalSmoothSpin_->value(), 0.16) &&
+        roughlyEqual(lowerResSpin_->value(), 0.35)) {
       mode = "fast";
     } else if (modelSizeSpin_->value() == 512 &&
                roughlyEqual(temporalSmoothSpin_->value(), 0.25) &&

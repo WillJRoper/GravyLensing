@@ -158,6 +158,7 @@ private:
   // ROI acceleration state for the Vision backend.
   cv::Rect currentVisionROI_;
   int framesSinceVisionFullFrame_ = 0;
+  int visionROIStableFrames_ = 0;
 
   // Smoothing factor in [0,1], defining weight between new and old mask
   const float temporalSmooth_ = 0.6f;
@@ -191,10 +192,9 @@ private:
 
   // ROI acceleration parameters.
   const int visionFullFrameInterval_ = 12;
-  const int visionROIPadding_ = 24;
-  const int visionMinROIDim_ = 160;
-  const float visionMaxROIAreaFraction_ = 0.85f;
-  const bool enableVisionROIAcceleration_ = false;
+  const int visionROIPadding_ = 32;
+  const int visionMinROIDim_ = 192;
+  const float visionMaxROIAreaFraction_ = 0.65f;
 
 
 

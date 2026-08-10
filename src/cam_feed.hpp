@@ -79,6 +79,8 @@ public:
   /// Apply a new ROI rectangle and mask at runtime.
   Q_INVOKABLE void setROI(cv::Rect rect, cv::Mat mask);
 
+  Q_INVOKABLE void setPreviewEnabled(bool enabled) { previewEnabled_ = enabled; }
+
   // Is the camera open?
   bool isOpen() const { return isOpen_; }
 
@@ -139,6 +141,9 @@ private:
 
   // Cooperative stop flag for the capture loop.
   std::atomic<bool> stopRequested_{false};
+
+  // Whether the capture loop should materialize preview cv::Mat frames.
+  std::atomic<bool> previewEnabled_{true};
 };
 
 /// Interactive ROI selector (usable from the main thread).

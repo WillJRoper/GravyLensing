@@ -17,8 +17,7 @@ struct FormatChoice {
   int pixelCount = std::numeric_limits<int>::max();
 };
 
-static cv::Mat convertSampleBufferToBgr(CMSampleBufferRef sampleBuffer) {
-  CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+static cv::Mat convertPixelBufferToBgr(CVPixelBufferRef imageBuffer) {
   if (imageBuffer == nullptr) {
     return cv::Mat();
   }
@@ -78,18 +77,12 @@ public:
       return;
     }
 
-    cv::Mat frame = convertSampleBufferToBgr(sampleBuffer);
-    if (frame.empty()) {
-      return;
-    }
-
     std::lock_guard<std::mutex> lock(frameMutex_);
     if (latestPixelBuffer_ != nullptr) {
       CVPixelBufferRelease(latestPixelBuffer_);
       latestPixelBuffer_ = nullptr;
     }
     latestPixelBuffer_ = CVPixelBufferRetain(imageBuffer);
-    latestFrame_ = std::move(frame);
     ++frameCounter_;
     frameCv_.notify_all();
   }
@@ -105,7 +98,6 @@ public:
   double fps_ = 0.0;
   mutable std::mutex frameMutex_;
   mutable std::condition_variable frameCv_;
-  cv::Mat latestFrame_;
   CVPixelBufferRef latestPixelBuffer_ = nullptr;
   uint64_t frameCounter_ = 0;
   uint64_t deliveredCounter_ = 0;
@@ -255,7 +247,6 @@ void AvFoundationCamera::close() {
       CVPixelBufferRelease(impl_->latestPixelBuffer_);
       impl_->latestPixelBuffer_ = nullptr;
     }
-    impl_->latestFrame_.release();
     impl_->frameCounter_ = 0;
     impl_->deliveredCounter_ = 0;
   }
@@ -274,6 +265,38 @@ bool AvFoundationCamera::waitForFrame(cv::Mat &frame, int timeoutMs,
                                       const std::atomic<bool> *stopRequested) {
   AppleVideoFrame nativeFrame;
   return waitForFrame(frame, nativeFrame, timeoutMs, stopRequested);
+}
+
+bool AvFoundationCamera::waitForNativeFrame(AppleVideoFrame &nativeFrame,
+                                            int timeoutMs,
+                                            const std::atomic<bool> *stopRequested) {
+  if (!impl_) {
+    return false;
+  }
+
+  std::unique_lock<std::mutex> lock(impl_->frameMutex_);
+  const auto predicate = [&]() {
+    return impl_->frameCounter_ != impl_->deliveredCounter_ ||
+           (stopRequested != nullptr && stopRequested->load());
+  };
+
+  if (timeoutMs <= 0) {
+    impl_->frameCv_.wait(lock, predicate);
+  } else if (!impl_->frameCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                                       predicate)) {
+    return false;
+  }
+
+  if (stopRequested != nullptr && stopRequested->load()) {
+    return false;
+  }
+  if (impl_->latestPixelBuffer_ == nullptr) {
+    return false;
+  }
+
+  nativeFrame = AppleVideoFrame(impl_->latestPixelBuffer_, false);
+  impl_->deliveredCounter_ = impl_->frameCounter_;
+  return true;
 }
 
 bool AvFoundationCamera::waitForFrame(cv::Mat &frame, AppleVideoFrame &nativeFrame,
@@ -299,12 +322,15 @@ bool AvFoundationCamera::waitForFrame(cv::Mat &frame, AppleVideoFrame &nativeFra
   if (stopRequested != nullptr && stopRequested->load()) {
     return false;
   }
-  if (impl_->latestFrame_.empty()) {
+  if (impl_->latestPixelBuffer_ == nullptr) {
     return false;
   }
 
-  frame = impl_->latestFrame_.clone();
   nativeFrame = AppleVideoFrame(impl_->latestPixelBuffer_, false);
+  frame = convertPixelBufferToBgr(nativeFrame.pixelBuffer);
+  if (frame.empty()) {
+    return false;
+  }
   impl_->deliveredCounter_ = impl_->frameCounter_;
   return true;
 }
@@ -314,6 +340,19 @@ bool AvFoundationCamera::latestFrame(cv::Mat &frame) const {
   return latestFrame(frame, nativeFrame);
 }
 
+bool AvFoundationCamera::latestNativeFrame(AppleVideoFrame &nativeFrame) const {
+  if (!impl_) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lock(impl_->frameMutex_);
+  if (impl_->latestPixelBuffer_ == nullptr) {
+    return false;
+  }
+  nativeFrame = AppleVideoFrame(impl_->latestPixelBuffer_, false);
+  return true;
+}
+
 bool AvFoundationCamera::latestFrame(cv::Mat &frame,
                                      AppleVideoFrame &nativeFrame) const {
   if (!impl_) {
@@ -321,11 +360,14 @@ bool AvFoundationCamera::latestFrame(cv::Mat &frame,
   }
 
   std::lock_guard<std::mutex> lock(impl_->frameMutex_);
-  if (impl_->latestFrame_.empty()) {
+  if (impl_->latestPixelBuffer_ == nullptr) {
     return false;
   }
-  frame = impl_->latestFrame_.clone();
   nativeFrame = AppleVideoFrame(impl_->latestPixelBuffer_, false);
+  frame = convertPixelBufferToBgr(nativeFrame.pixelBuffer);
+  if (frame.empty()) {
+    return false;
+  }
   return true;
 }
 

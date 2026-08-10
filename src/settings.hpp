@@ -153,9 +153,9 @@ struct AppSettings {
   AppSettings withQualityModeApplied() const {
     AppSettings tuned = *this;
     if (qualityMode == "fast") {
-      tuned.modelSize = 256;
-      tuned.temporalSmooth = 0.18f;
-      tuned.lowerRes = 0.40f;
+      tuned.modelSize = 224;
+      tuned.temporalSmooth = 0.16f;
+      tuned.lowerRes = 0.35f;
     } else if (qualityMode == "high") {
       tuned.modelSize = 640;
       tuned.temporalSmooth = 0.35f;
