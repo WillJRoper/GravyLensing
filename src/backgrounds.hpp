@@ -50,6 +50,9 @@ public:
   /// Returns false if directory doesn’t exist or no images found.
   bool load();
 
+  /// Scan a new directory, retaining the current images if loading fails.
+  bool setDirectory(const std::string &dir);
+
   /// Get the currently-selected image.
   const cv::Mat &current() const;
 
@@ -58,9 +61,6 @@ public:
 
   /// Go back to the previous image (wraps round); returns false if none loaded.
   bool previous();
-
-  /// Select image by zero-based index; returns false if idx out of range.
-  bool setIndex(size_t idx);
 
   /// How many images did we actually load?
   size_t size() const noexcept;

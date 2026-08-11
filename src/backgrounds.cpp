@@ -66,46 +66,64 @@ Backgrounds::Backgrounds(const std::string &dir) : dir_(dir) {}
  * @return false if directory doesn’t exist or no images found.
  */
 bool Backgrounds::load() {
-  if (!fs::exists(dir_) || !fs::is_directory(dir_))
-    return false;
+  std::vector<std::string> paths;
+  std::vector<cv::Mat> images;
 
-  // collect all matching paths
-  for (auto const &entry : fs::directory_iterator(dir_)) {
-    if (!entry.is_regular_file())
-      continue;
+  try {
+    if (!fs::exists(dir_) || !fs::is_directory(dir_))
+      return false;
 
-    auto ext = entry.path().extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+    // collect all matching paths
+    for (auto const &entry : fs::directory_iterator(dir_)) {
+      if (!entry.is_regular_file())
+        continue;
 
-    if (std::find(kImageExts.begin(), kImageExts.end(), ext) !=
-        kImageExts.end()) {
-      paths_.push_back(entry.path().string());
+      auto ext = entry.path().extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+
+      if (std::find(kImageExts.begin(), kImageExts.end(), ext) !=
+          kImageExts.end()) {
+        paths.push_back(entry.path().string());
+      }
     }
+  } catch (const fs::filesystem_error &) {
+    return false;
   }
 
-  if (paths_.empty())
+  if (paths.empty())
     return false;
 
   // sort so numbering is stable
-  std::sort(paths_.begin(), paths_.end());
-
-  if (paths_.size() > 10) {
-    std::cerr << "Warning: More than 10 images found, only the first 10 are "
-                 "accessible.\n";
-    paths_.resize(10);
-  }
+  std::sort(paths.begin(), paths.end());
 
   // load into memory
-  images_.reserve(paths_.size());
-  for (auto const &p : paths_) {
+  images.reserve(paths.size());
+  for (auto const &p : paths) {
     cv::Mat img;
     if (loadImage(p, img)) {
-      images_.push_back(std::move(img));
+      images.push_back(std::move(img));
     }
   }
 
-  return !images_.empty();
+  if (images.empty())
+    return false;
+
+  paths_ = std::move(paths);
+  images_ = std::move(images);
+  currentIdx_ = 0;
+  return true;
+}
+
+bool Backgrounds::setDirectory(const std::string &dir) {
+  const std::string previousDir = dir_;
+  dir_ = dir;
+  if (!load()) {
+    dir_ = previousDir;
+    return false;
+  }
+  emit backgroundChanged(current());
+  return true;
 }
 
 /**
@@ -151,20 +169,6 @@ bool Backgrounds::previous() {
   if (images_.empty())
     return false;
   currentIdx_ = (currentIdx_ + images_.size() - 1) % images_.size();
-  emit backgroundChanged(images_[currentIdx_]);
-  return true;
-}
-
-/**
- * @brief Select image by zero-based index; returns false if idx out of range.
- *
- * @param idx index of the image to set
- * @return true if the image was set successfully, false otherwise
- */
-bool Backgrounds::setIndex(size_t idx) {
-  if (idx >= images_.size())
-    return false;
-  currentIdx_ = idx;
   emit backgroundChanged(images_[currentIdx_]);
   return true;
 }

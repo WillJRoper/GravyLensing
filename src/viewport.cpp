@@ -161,19 +161,20 @@ void ViewPort::setupMenuBar() {
 
   QMenu *bgMenu = viewMenu->addMenu("&Background");
   bgMenu->setToolTip("Quickly switch between loaded background images.");
-  bgActionGroup_ = new QActionGroup(this);
-  bgActionGroup_->setExclusive(true);
 
-  for (int i = 0; i < 10; ++i) {
-    QAction *a = bgMenu->addAction(QString("Background &%1").arg(i));
-    a->setCheckable(true);
-    a->setShortcut(QKeySequence(QString::number(i)));
-    a->setToolTip(QString("Switch to background image %1.").arg(i));
-    bgActionGroup_->addAction(a);
-    bgActions_.append(a);
-    connect(a, &QAction::triggered, this,
-            [this, i]() { emit backgroundIndexSelected(static_cast<size_t>(i)); });
-  }
+  QAction *previousBackground = bgMenu->addAction("&Previous Background");
+  previousBackground->setShortcut(Qt::Key_Left);
+  connect(previousBackground, &QAction::triggered, this, [this]() {
+    if (backgrounds_)
+      backgrounds_->previous();
+  });
+
+  QAction *nextBackground = bgMenu->addAction("&Next Background");
+  nextBackground->setShortcut(Qt::Key_Right);
+  connect(nextBackground, &QAction::triggered, this, [this]() {
+    if (backgrounds_)
+      backgrounds_->next();
+  });
 
   // ── Session ───────────────────────────────────────────────────────
   QMenu *settingsMenu = mb->addMenu("&Session");
@@ -221,11 +222,6 @@ void ViewPort::setMaskModeLabel(bool isColorMode) {
                                            : "Mask Mode: &Person");
 }
 
-void ViewPort::setBackgroundIndexChecked(size_t idx) {
-  if (idx < static_cast<size_t>(bgActions_.size()))
-    bgActions_[static_cast<int>(idx)]->setChecked(true);
-}
-
 void ViewPort::setColorModeActive(bool active) {
   if (selectColorAction_) {
     selectColorAction_->setEnabled(true);
@@ -236,13 +232,6 @@ void ViewPort::setColorModeActive(bool active) {
 
 void ViewPort::setBackgroundImages(Backgrounds *backgrounds) {
   backgrounds_ = backgrounds;
-  if (!backgrounds)
-    return;
-
-  const size_t count = backgrounds->size();
-  for (int i = 0; i < bgActions_.size(); ++i) {
-    bgActions_[i]->setEnabled(static_cast<size_t>(i) < count);
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,8 +1,8 @@
 /**
  * @file segmentation_worker.hpp
  *
- * This file defines the worker class used to segment a frame to find
- * people using libtorch. A new mask is generated for every new frame.
+ * This file defines the worker class used to segment a frame to find people.
+ * A new mask is generated for every new frame.
  *
  * This file is part of GravyLensing, a real-time gravitational lensing
  * simulation.
@@ -33,6 +33,7 @@
 #include <QDebug>
 #include <QObject>
 
+#ifndef __APPLE__
 // Torch includes (with slots override to avoid conflicts with Qt)
 #if defined(slots)
 #pragma push_macro("slots")
@@ -42,6 +43,7 @@
 #include <torch/torch.h>
 #if defined(slots)
 #pragma pop_macro("slots")
+#endif
 #endif
 
 // External includes
@@ -115,7 +117,8 @@ private:
   // Path to the segmentation model
   std::string modelPath_;
 
-  // Internal state for segmentation
+#ifndef __APPLE__
+  // Internal state for Torch segmentation
   torch::jit::script::Module segmentModel_;
 
   // The training device
@@ -124,6 +127,7 @@ private:
   // pre-allocated Tensor for inference on the CPU and GPU
   torch::Tensor inputCpuTensor_;
   torch::Tensor inputTensor_;
+#endif
 
   // macOS-native Vision backend, preferred when available.
   std::unique_ptr<ApplePersonSegmentationHelper> appleSegmentationHelper_;
@@ -236,6 +240,7 @@ private:
 #endif
 };
 
+#ifndef __APPLE__
 /**
  * @brief Pick the device for PyTorch operations.
  *
@@ -266,3 +271,4 @@ static torch::Device pickDevice() {
     return torch::Device(torch::kCPU);
   }
 }
+#endif

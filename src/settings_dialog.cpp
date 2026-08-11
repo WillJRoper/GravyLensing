@@ -535,7 +535,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   autoCycleCheck_ = new QCheckBox("Auto-cycle backgrounds");
   autoCycleCheck_->setToolTip(
       "When enabled, the background changes automatically after the "
-      "specified interval. When disabled, switch manually with 0–9 keys.");
+      "specified interval. When disabled, switch with the arrow keys.");
   autoCycleCheck_->setChecked(settings.secondsPerBackground > 0);
   addFormRow(bgForm, "Auto-cycle", autoCycleCheck_->toolTip(),
              autoCycleCheck_);

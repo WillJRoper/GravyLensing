@@ -36,6 +36,10 @@
 
 # Ignore the build directory 
 build/
+build-*/
+dist/
+Testing/
 
 # Ignore the executable 
 gravy_lens
+test_color_mask

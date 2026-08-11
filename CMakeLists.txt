@@ -1,6 +1,7 @@
 # Minimum required CMake version and project definition
 cmake_minimum_required(VERSION 3.10)
-project(GravyLensing LANGUAGES CXX)
+set(GRAVY_VERSION "1.0.0" CACHE STRING "GravyLensing release version")
+project(GravyLensing VERSION ${GRAVY_VERSION} LANGUAGES CXX)
 
 # Set C++ standard to C++17
 set(CMAKE_CXX_STANDARD 17)
@@ -94,11 +95,17 @@ set(FFTW3_LIBRARIES
 # Other dependencies
 
 # OpenCV for image processing
-find_package(OpenCV REQUIRED)
+if(APPLE)
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+else()
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui videoio)
+endif()
 # Portable threading library
 find_package(Threads REQUIRED)
-# LibTorch (PyTorch C++ API)
-find_package(Torch REQUIRED)
+# LibTorch fallback for platforms without Apple's Vision framework
+if(NOT APPLE)
+  find_package(Torch REQUIRED)
+endif()
 # Qt6 Widgets for GUI
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
@@ -156,13 +163,33 @@ endif()
 # Define the executable target
 add_executable(gravy_lens ${SOURCES})
 
+if(APPLE)
+  file(GLOB BACKGROUND_RESOURCES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/backgrounds/*.tiff")
+  target_sources(gravy_lens PRIVATE ${BACKGROUND_RESOURCES})
+  set_source_files_properties(${BACKGROUND_RESOURCES} PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources/backgrounds")
+endif()
+
 # Link OpenMP target (automatically adds appropriate compile & link flags)
 target_link_libraries(gravy_lens PRIVATE OpenMP::OpenMP_CXX)
 
-# Place build output (binaries) one level above the build directory
-set_target_properties(gravy_lens PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.."
-)
+if(APPLE)
+  set_target_properties(gravy_lens PROPERTIES
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist.in"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.willroper.gravylensing"
+    MACOSX_BUNDLE_BUNDLE_NAME "GravyLensing"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    OSX_ARCHITECTURES "arm64"
+    OUTPUT_NAME "GravyLensing"
+  )
+else()
+  set_target_properties(gravy_lens PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.."
+  )
+endif()
 
 # ============================================================================
 # Linker settings
@@ -197,8 +224,8 @@ set_property(TARGET gravy_lens PROPERTY ENABLE_EXPORTS ON)
 # ============================================================================
 # Installation
 
-# Install the executable into the 'bin' directory of the install prefix
-install(TARGETS gravy_lens RUNTIME DESTINATION bin)
+# Install the executable into the platform's standard destination.
+install(TARGETS gravy_lens BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 
 # ============================================================================
 # Unit tests
@@ -232,4 +259,14 @@ if(BUILD_TESTS)
 
   enable_testing()
   add_test(NAME color_mask COMMAND test_color_mask)
+
+  add_executable(test_backgrounds
+    src/backgrounds.cpp
+    tests/test_backgrounds.cpp
+  )
+  target_link_libraries(test_backgrounds PRIVATE
+    Qt6::Core
+    ${OpenCV_LIBS}
+  )
+  add_test(NAME backgrounds COMMAND test_backgrounds)
 endif()

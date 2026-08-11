@@ -1,8 +1,8 @@
 /**
  * @file segmentation_worker.cpp
  *
- * This file defines the worker class used to segment a frame to find
- * people using libtorch. A new mask is generated for every new frame.
+ * This file defines the worker class used to segment a frame to find people.
+ * A new mask is generated for every new frame.
  *
  * This file is part of GravyLensing, a real-time gravitational lensing
  * simulation.
@@ -277,13 +277,18 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
                                        int modelSize, int nthreads,
                                        float temporalSmooth, float lowerRes,
                                        const std::string &qualityMode)
-    : modelPath_(modelPath), fastW_(modelSize), fastH_(modelSize),
-      nthreads_(nthreads), device_(pickDevice()),
-      lowerRes_(lowerRes), qualityMode_(qualityMode),
+    : modelPath_(modelPath),
+#ifndef __APPLE__
+      device_(pickDevice()),
+#endif
+      qualityMode_(qualityMode), fastW_(modelSize), fastH_(modelSize),
+      nthreads_(nthreads), lowerRes_(lowerRes),
       temporalSmooth_(temporalSmooth) {
 
-  std::cout << "[SegmentationWorker] Initializing segmentation model...\n";
+  std::cout << "[SegmentationWorker] Initializing segmentation backend...\n";
+#ifndef __APPLE__
   std::cout << "[SegmentationWorker] Using device: " << device_ << "\n";
+#endif
   std::cout << "[SegmentationWorker] Model size: " << fastW_ << "x" << fastH_
             << "\n";
   std::cout << "[SegmentationWorker] Temporal smoothing: " << temporalSmooth_
@@ -315,7 +320,7 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
     return;
   }
 
-  std::cout << "[SegmentationWorker] Loaded model from " << modelPath_ << "\n";
+  std::cout << "[SegmentationWorker] Segmentation backend ready\n";
 }
 
 SegmentationWorker::~SegmentationWorker() = default;
@@ -490,6 +495,7 @@ void SegmentationWorker::drainPendingAppleFrame() {
  */
 void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
 #ifdef __APPLE__
+  (void)modelPath;
   appleSegmentationHelper_ =
       std::make_unique<ApplePersonSegmentationHelper>();
   if (appleSegmentationHelper_ != nullptr &&
@@ -501,8 +507,8 @@ void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
     return;
   }
   appleSegmentationHelper_.reset();
-#endif
-
+  modelLoaded_ = false;
+#else
   try {
     // Load the segmentation model
     segmentModel_ = torch::jit::load(modelPath_, device_);
@@ -525,9 +531,14 @@ void SegmentationWorker::setupSegmentationModel(const std::string &modelPath) {
       {1, 3, fastH_, fastW_},
       torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
 #endif
+#endif
 }
 
 bool SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
+#ifdef __APPLE__
+  (void)frame;
+  return false;
+#else
   static thread_local PerfLog visionPerf("person-mask-vision", 60);
   static thread_local PerfLog resizePerf("person-mask-resize", 60);
   static thread_local PerfLog colorPerf("person-mask-color", 60);
@@ -540,12 +551,6 @@ bool SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
   static thread_local PerfLog upscalePerf("person-mask-upscale", 60);
 
   auto stageStart = std::chrono::steady_clock::now();
-
-#ifdef __APPLE__
-  if (usingAppleVision_ && appleSegmentationHelper_ != nullptr) {
-    return false;
-  }
-#endif
 
   // Downsample the frame to the model size
   cv::resize(frame, smallFrame_, cv::Size(fastW_, fastH_), 0, 0,
@@ -712,6 +717,7 @@ bool SegmentationWorker::detectPersonMask(const cv::Mat &frame) {
   stageEnd = std::chrono::steady_clock::now();
   upscalePerf.addSample(elapsedMs(stageStart, stageEnd));
   return true;
+#endif
 }
 
 #ifdef __APPLE__

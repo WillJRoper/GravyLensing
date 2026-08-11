@@ -161,7 +161,7 @@ public:
     QCommandLineOption secondsPerBackgroundOption(
         QStringList() << "sb" << "secondsPerBackground",
         "Seconds per background image, if -1 then background images are "
-        "selected through the 0-9 keys (int, default=-1).",
+        "selected with the arrow keys (int, default=-1).",
         "secondsPerBackground", QString::number(defaults.secondsPerBackground));
     parser.addOption(secondsPerBackgroundOption);
 

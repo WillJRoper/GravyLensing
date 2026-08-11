@@ -30,9 +30,7 @@
 #include <qtwidgets/QMainWindow>
 
 #include <QAction>
-#include <QActionGroup>
 #include <QMenu>
-#include <QVector>
 
 // External includes
 #include <opencv2/opencv.hpp>
@@ -82,9 +80,6 @@ public Q_SLOTS:
   /// Update the View > Mask Mode label to reflect the current mode.
   void setMaskModeLabel(bool isColorMode);
 
-  /// Highlight the matching entry in View > Background.
-  void setBackgroundIndexChecked(size_t idx);
-
   // Image data slots — called from worker threads via Qt::QueuedConnection.
   void setImage(const cv::Mat &image);
   void setBackground(const cv::Mat &background);
@@ -96,7 +91,6 @@ signals:
   void selectColorRequested();
   void toggleMaskModeRequested();
   void debugGridToggled(bool enabled);
-  void backgroundIndexSelected(size_t idx);
   void settingsChanged(const AppSettings &newSettings);
 
 protected:
@@ -129,8 +123,6 @@ private:
   QAction *toggleMaskAction_ = nullptr;
   QAction *debugGridAction_ = nullptr;
 
-  QVector<QAction *> bgActions_;
-  QActionGroup *bgActionGroup_ = nullptr;
 };
 
 ViewPort *initViewport(Backgrounds *backgrounds, const AppSettings &settings,

@@ -29,6 +29,7 @@
 
 #include <string>
 
+#include <QCoreApplication>
 #include <QSettings>
 
 struct AppSettings {
@@ -66,7 +67,13 @@ struct AppSettings {
 
   // ── Runtime ────────────────────────────────────────────────────────
   bool debugGrid = false;       // Show 2x2 diagnostic view
+#ifdef __APPLE__
+  std::string backgroundsDir =
+      (QCoreApplication::applicationDirPath() + "/../Resources/backgrounds")
+          .toStdString();
+#else
   std::string backgroundsDir = "backgrounds/";
+#endif
   int secondsPerBackground = -1;// Auto-cycle interval; -1 = manual
 
   /// True when every field matches.

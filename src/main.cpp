@@ -779,9 +779,6 @@ int main(int argc, char **argv) {
                      saveSessionSelections(s);
                    });
 
-  QObject::connect(vp, &ViewPort::backgroundIndexSelected, backgrounds,
-                   &Backgrounds::setIndex);
-
   QObject::connect(vp, &ViewPort::selectROIRequested, vp, [&]() {
     if (camFeed == nullptr || camThread == nullptr) {
       return;
@@ -861,9 +858,12 @@ int main(int argc, char **argv) {
                         return;
                       }
 
-                      const AppSettings previousSettings = activeSettings;
-                      const SessionSelections previousSelections =
-                          sessionSelections;
+                       const AppSettings previousSettings = activeSettings;
+                       const SessionSelections previousSelections =
+                           sessionSelections;
+                       const bool backgroundsChanged =
+                           newSettings.backgroundsDir !=
+                           previousSettings.backgroundsDir;
                        const bool actuallySwitchedToColor =
                            previousSettings.maskMode != "color" &&
                            newSettings.maskMode == "color";
@@ -887,7 +887,20 @@ int main(int argc, char **argv) {
                        // live handlers (reselection lambda, ROI handler).
                       // No need to BlockingQueuedConnection-query workers.
 
-                      stopPipeline();
+                       if (backgroundsChanged &&
+                           !backgrounds->setDirectory(
+                               newSettings.backgroundsDir)) {
+                         QMessageBox::warning(
+                             vp, "Backgrounds Not Changed",
+                             "No supported images could be loaded from the "
+                             "selected directory.");
+                         vp->setSettings(previousSettings);
+                         return;
+                       }
+                       if (backgroundsChanged)
+                         vp->setBackgroundImages(backgrounds);
+
+                       stopPipeline();
 
                       if (!startPipeline(newSettings, sessionSelections,
                                          /*isReconfigure=*/true)) {
@@ -896,9 +909,15 @@ int main(int argc, char **argv) {
                             "The new settings could not be applied. Restoring "
                             "the previous working configuration.");
 
-                        sessionSelections = previousSelections;
+                         sessionSelections = previousSelections;
 
-                        if (!startPipeline(previousSettings, previousSelections,
+                         if (backgroundsChanged) {
+                           backgrounds->setDirectory(
+                               previousSettings.backgroundsDir);
+                           vp->setBackgroundImages(backgrounds);
+                         }
+
+                         if (!startPipeline(previousSettings, previousSelections,
                                            true)) {
                           QMessageBox::critical(
                               vp, "Fatal Configuration Error",
