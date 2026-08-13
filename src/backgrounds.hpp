@@ -76,7 +76,7 @@ signals:
 private:
   std::string dir_;
   std::vector<std::string> paths_;
-  std::vector<cv::Mat> images_;
+  cv::Mat currentImage_;
   size_t currentIdx_{0};
 
   // supported extensions (lower-case)

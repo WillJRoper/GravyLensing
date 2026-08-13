@@ -26,6 +26,7 @@
 #include <QColorDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QFont>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGroupBox>
@@ -133,13 +134,26 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
 
   auto *contentLayout = new QVBoxLayout(content);
   contentLayout->setContentsMargins(0, 0, 0, 0);
-  contentLayout->setSpacing(12);
+  contentLayout->setSpacing(16);
+
+  auto *heading = new QLabel(windowTitle);
+  QFont headingFont = heading->font();
+  headingFont.setPointSize(20);
+  headingFont.setWeight(QFont::DemiBold);
+  heading->setFont(headingFont);
+  contentLayout->addWidget(heading);
 
   auto *summary = new QLabel(
       "Choose the mask source first, then tune the relevant settings below. "
       "Changes apply when you start or restart the session.");
   summary->setWordWrap(true);
+  summary->setForegroundRole(QPalette::PlaceholderText);
   contentLayout->addWidget(summary);
+
+  auto *separator = new QFrame;
+  separator->setFrameShape(QFrame::HLine);
+  separator->setFrameShadow(QFrame::Sunken);
+  contentLayout->addWidget(separator);
 
   auto *columns = new QHBoxLayout;
   columns->setSpacing(24);
@@ -235,9 +249,14 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   configureFormLayout(modeForm);
 
   maskModeCombo_ = new QComboBox;
+#ifdef __APPLE__
+  maskModeCombo_->setToolTip(
+      "Person uses Apple Vision; Color tracks a user-selected HSV colour.");
+#else
   maskModeCombo_->setToolTip(
       "Person uses an AI segmentation model; Color tracks a user-selected "
       "HSV colour.");
+#endif
   maskModeCombo_->addItem("Person (AI segmentation)", "person");
   maskModeCombo_->addItem("Color tracking", "color");
   if (settings.maskMode == "color")
@@ -270,6 +289,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             &SettingsDialog::browseModelPath);
     connect(modelPathEdit_, &QLineEdit::textChanged, this,
             [this](const QString &text) { modelPathEdit_->setToolTip(text); });
+#ifdef __APPLE__
+    personForm->setRowVisible(row, false);
+#endif
   }
 
   modelSizeSpin_ = makeIntSpin(128, 1024, 128, " px",
@@ -604,6 +626,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
       QDialogButtonBox::RestoreDefaults | QDialogButtonBox::Ok |
       QDialogButtonBox::Cancel);
   buttons->button(QDialogButtonBox::Ok)->setText(acceptLabel);
+  buttons->button(QDialogButtonBox::Ok)->setDefault(true);
   mainLayout->addWidget(buttons);
 
   connect(buttons->button(QDialogButtonBox::RestoreDefaults),

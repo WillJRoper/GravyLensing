@@ -169,6 +169,9 @@ if(APPLE)
   target_sources(gravy_lens PRIVATE ${BACKGROUND_RESOURCES})
   set_source_files_properties(${BACKGROUND_RESOURCES} PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources/backgrounds")
+  target_sources(gravy_lens PRIVATE LICENSE)
+  set_source_files_properties(LICENSE PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources")
 endif()
 
 # Link OpenMP target (automatically adds appropriate compile & link flags)

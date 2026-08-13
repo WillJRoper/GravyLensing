@@ -186,6 +186,14 @@ int main(int argc, char **argv) {
     savedSettings.setValue("flip", false);
     savedSettings.setValue("settingsVersion", 1);
   }
+#ifdef __APPLE__
+  if (settingsVersion < 2 && appSettings.backgroundsDir == "backgrounds/") {
+    appSettings.backgroundsDir = AppSettings().backgroundsDir;
+    savedSettings.setValue(
+        "backgroundsDir", QString::fromStdString(appSettings.backgroundsDir));
+    savedSettings.setValue("settingsVersion", 2);
+  }
+#endif
 
   CommandLineOptions opts = CommandLineOptions::parse(app, appSettings);
   appSettings.nthreads = opts.nthreads;

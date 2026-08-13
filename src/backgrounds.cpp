@@ -67,7 +67,6 @@ Backgrounds::Backgrounds(const std::string &dir) : dir_(dir) {}
  */
 bool Backgrounds::load() {
   std::vector<std::string> paths;
-  std::vector<cv::Mat> images;
 
   try {
     if (!fs::exists(dir_) || !fs::is_directory(dir_))
@@ -97,20 +96,22 @@ bool Backgrounds::load() {
   // sort so numbering is stable
   std::sort(paths.begin(), paths.end());
 
-  // load into memory
-  images.reserve(paths.size());
+  std::vector<std::string> validPaths;
+  cv::Mat firstImage;
   for (auto const &p : paths) {
     cv::Mat img;
     if (loadImage(p, img)) {
-      images.push_back(std::move(img));
+      validPaths.push_back(p);
+      if (firstImage.empty())
+        firstImage = std::move(img);
     }
   }
 
-  if (images.empty())
+  if (validPaths.empty())
     return false;
 
-  paths_ = std::move(paths);
-  images_ = std::move(images);
+  paths_ = std::move(validPaths);
+  currentImage_ = std::move(firstImage);
   currentIdx_ = 0;
   return true;
 }
@@ -144,7 +145,7 @@ bool Backgrounds::loadImage(const std::string &path, cv::Mat &out) {
  *
  * @return reference to the current image
  */
-const cv::Mat &Backgrounds::current() const { return images_[currentIdx_]; }
+const cv::Mat &Backgrounds::current() const { return currentImage_; }
 
 /**
  * @brief Advance to the next image (wraps round); returns false if none loaded.
@@ -152,10 +153,11 @@ const cv::Mat &Backgrounds::current() const { return images_[currentIdx_]; }
  * @return true if the next image was set successfully, false otherwise
  */
 bool Backgrounds::next() {
-  if (images_.empty())
+  if (paths_.empty())
     return false;
-  currentIdx_ = (currentIdx_ + 1) % images_.size();
-  emit backgroundChanged(images_[currentIdx_]);
+  currentIdx_ = (currentIdx_ + 1) % paths_.size();
+  loadImage(paths_[currentIdx_], currentImage_);
+  emit backgroundChanged(currentImage_);
   return true;
 }
 
@@ -166,10 +168,11 @@ bool Backgrounds::next() {
  * @return true if the previous image was set successfully, false otherwise
  */
 bool Backgrounds::previous() {
-  if (images_.empty())
+  if (paths_.empty())
     return false;
-  currentIdx_ = (currentIdx_ + images_.size() - 1) % images_.size();
-  emit backgroundChanged(images_[currentIdx_]);
+  currentIdx_ = (currentIdx_ + paths_.size() - 1) % paths_.size();
+  loadImage(paths_[currentIdx_], currentImage_);
+  emit backgroundChanged(currentImage_);
   return true;
 }
 
@@ -178,7 +181,7 @@ bool Backgrounds::previous() {
  *
  * @return number of loaded images
  */
-size_t Backgrounds::size() const noexcept { return images_.size(); }
+size_t Backgrounds::size() const noexcept { return paths_.size(); }
 
 /**
  * @brief How many rows are in the current background?
@@ -186,9 +189,9 @@ size_t Backgrounds::size() const noexcept { return images_.size(); }
  * @return number of rows in the current image
  */
 int Backgrounds::rows() const noexcept {
-  if (images_.empty())
+  if (currentImage_.empty())
     return 0;
-  return images_[currentIdx_].rows;
+  return currentImage_.rows;
 }
 
 /**
@@ -197,7 +200,7 @@ int Backgrounds::rows() const noexcept {
  * @return number of columns in the current image
  */
 int Backgrounds::cols() const noexcept {
-  if (images_.empty())
+  if (currentImage_.empty())
     return 0;
-  return images_[currentIdx_].cols;
+  return currentImage_.cols;
 }
