@@ -145,8 +145,10 @@ See `models/README` for the models already included.
 ./gravy_lens
 ```
 
-The session-setup dialog opens. Pick the mask source, adjust the relevant
-section, then click **Start Session**.
+The guided Session Setup opens with remembered choices for subject detection,
+camera, quality, region, and backgrounds. The recommended defaults require no
+configuration; click **Start Session**. Use **Advanced Settings...** for full
+control.
 
 ### CLI arguments
 
@@ -157,17 +159,20 @@ saved session setting. Boolean flags accept an explicit `--no-` counterpart.
 Usage: ./gravy_lens [options]
 
 Options:
-  -n, --nthreads <n>              CPU threads (must be ≥ 2; default 12).
+  -n, --nthreads <n>              Override automatic CPU thread allocation.
   -s, --strength <f>              Lens strength multiplier (default 4.0).
   -f, --softening <f>             Kernel softening radius in px (default 50.0).
   -m, --modelSize <n>             Segmentation model input size (default 512).
   -d, --deviceIndex <n>           Camera device index (default 0).
+  --fps, --frameRate <n>           Target camera frame rate (default 30).
   -g, --debugGrid                 Show 2×2 diagnostic grid at start.
   --no-debugGrid                  Force the debug grid off.
   -p, --padFactor <n>             FFT padding multiplier (default 2).
   --mp, --modelPath <path>        TorchScript model path (Linux only).
   -t, --temporalSmooth <f>        Mask temporal blending factor (default 0.25).
+  --personSensitivity <n>         Person sensitivity, 0–100 (default 50).
   --lr, --lowerRes <f>            Resolution scale for lensing, 0.1–1.0 (default 0.5).
+  --quality, --qualityMode <mode>  fast, balanced, high, or custom.
   --sb, --secondsPerBackground <n> Seconds per background; -1 = manual (default -1).
   --di, --distortInside           Also lens the interior of the mask (default on).
   --no-distortInside              Force interior distortion off.
@@ -188,9 +193,9 @@ Choose **Person** mode and click **Start Session**.
 ### Settings panel
 
 - The dialog is scrollable and works on smaller laptop displays.
-- **Person Detection** controls are enabled only when Person mode is selected.
-- **Color Detection** controls are enabled only when Color mode is selected.
-- **Resolution scale** uses a slider alongside the spin box.
+- Only settings for the selected detection mode are shown.
+- Recommended presets hide technical controls; **Custom** reveals them.
+- Camera and background choices are validated directly in the dialog.
 - **Restore Defaults** resets every control to shipped defaults.
 - Colour and ROI selections persist across session restarts.
 

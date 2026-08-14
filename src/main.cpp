@@ -50,6 +50,7 @@
 #include "cmd_parser.hpp"
 #include "color_mask.hpp"
 #include "lensing_worker.hpp"
+#include "session_setup_dialog.hpp"
 #include "segmentation_worker.hpp"
 #include "settings.hpp"
 #include "settings_dialog.hpp"
@@ -197,6 +198,7 @@ int main(int argc, char **argv) {
 
   CommandLineOptions opts = CommandLineOptions::parse(app, appSettings);
   appSettings.nthreads = opts.nthreads;
+  appSettings.automaticThreads = opts.automaticThreads;
   appSettings.strength = opts.strength;
   appSettings.softening = opts.softening;
   appSettings.deviceIndex = opts.deviceIndex;
@@ -205,6 +207,7 @@ int main(int argc, char **argv) {
   appSettings.padFactor = opts.padFactor;
   appSettings.modelSize = opts.modelSize;
   appSettings.temporalSmooth = opts.temporalSmooth;
+  appSettings.personSensitivity = opts.personSensitivity;
   appSettings.lowerRes = opts.lowerRes;
   appSettings.qualityMode = opts.qualityMode;
   appSettings.secondsPerBackground = opts.secondsPerBackground;
@@ -231,21 +234,22 @@ int main(int argc, char **argv) {
   loadSessionSelections(savedSettings);
 
   {
-    SettingsDialog startupDialog(appSettings, "Session Setup",
-                                 "Start Session",
-                                 sessionSelections.hue,
-                                 sessionSelections.sat,
-                                 sessionSelections.val,
-                                 sessionSelections.hasColorTarget,
-                                 sessionSelections.hasROI,
-                                 sessionSelections.roiRect.x,
-                                 sessionSelections.roiRect.y,
-                                 sessionSelections.roiRect.width,
-                                 sessionSelections.roiRect.height);
+    SessionSetupDialog startupDialog(
+        appSettings, sessionSelections.hue, sessionSelections.sat,
+        sessionSelections.val, sessionSelections.hasColorTarget,
+        sessionSelections.hasROI);
     if (startupDialog.exec() != QDialog::Accepted) {
       return 0;
     }
     appSettings = startupDialog.settings();
+    if (startupDialog.colorPickRequested()) {
+      sessionSelections.hasColorTarget = true;
+      sessionSelections.hue = startupDialog.pickedHue();
+      sessionSelections.sat = startupDialog.pickedSat();
+      sessionSelections.val = startupDialog.pickedVal();
+    }
+    if (startupDialog.colorFramePickRequested())
+      sessionSelections.hasColorTarget = false;
   }
 
   fftwf_init_threads();
@@ -411,9 +415,10 @@ int main(int argc, char **argv) {
     SegmentationWorker *newSegWorker =
         new SegmentationWorker(effectiveSettings.modelPath,
                                effectiveSettings.modelSize, nfftThreads,
-                               effectiveSettings.temporalSmooth,
-                               effectiveSettings.lowerRes,
-                               effectiveSettings.visionQualityMode());
+                                effectiveSettings.temporalSmooth,
+                                effectiveSettings.lowerRes,
+                                effectiveSettings.visionQualityMode(),
+                                effectiveSettings.personSensitivity);
     if (!newSegWorker->isModelLoaded()) {
       reportError("Failed to load segmentation model from " +
                   activeSettings.modelPath);
@@ -457,9 +462,10 @@ int main(int argc, char **argv) {
       newSegWorker = new SegmentationWorker(effectiveSettings.modelPath,
                                             effectiveSettings.modelSize,
                                             nfftThreads,
-                                            effectiveSettings.temporalSmooth,
-                                            effectiveSettings.lowerRes,
-                                            effectiveSettings.visionQualityMode());
+                                             effectiveSettings.temporalSmooth,
+                                             effectiveSettings.lowerRes,
+                                             effectiveSettings.visionQualityMode(),
+                                             effectiveSettings.personSensitivity);
       newPersonModeAvailable = newSegWorker->isModelLoaded();
       if (!newPersonModeAvailable) {
         reportError("Failed to load segmentation model from " +
@@ -812,6 +818,15 @@ int main(int argc, char **argv) {
     }
 
     camThread->start();
+  });
+
+  QObject::connect(vp, &ViewPort::clearROIRequested, vp, [&]() {
+    sessionSelections.hasROI = false;
+    sessionSelections.roiRect = cv::Rect();
+    sessionSelections.roiMask.release();
+    if (camFeed != nullptr)
+      camFeed->clearROI();
+    vp->setROIState(false, 0, 0, 0, 0);
   });
 
   QObject::connect(vp, &ViewPort::selectColorRequested, vp, [&]() {

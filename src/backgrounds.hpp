@@ -53,6 +53,8 @@ public:
   /// Scan a new directory, retaining the current images if loading fails.
   bool setDirectory(const std::string &dir);
 
+  static size_t discoverableImageCount(const std::string &dir);
+
   /// Get the currently-selected image.
   const cv::Mat &current() const;
 

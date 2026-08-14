@@ -40,6 +40,7 @@ class CommandLineOptions {
 public:
   // Command-line options
   int nthreads;
+  bool automaticThreads;
   float strength;
   float softening;
   int deviceIndex;
@@ -48,6 +49,7 @@ public:
   int padFactor;
   int modelSize;
   float temporalSmooth;
+  int personSensitivity;
   float lowerRes;
   std::string qualityMode;
   int secondsPerBackground;
@@ -144,6 +146,12 @@ public:
         "temporalSmooth", QString::number(defaults.temporalSmooth));
     parser.addOption(temporalSmoothOption);
 
+    QCommandLineOption personSensitivityOption(
+        QStringList() << "personSensitivity",
+        "Person detection sensitivity from 0 (strict) to 100 (sensitive).",
+        "personSensitivity", QString::number(defaults.personSensitivity));
+    parser.addOption(personSensitivityOption);
+
     // lowerRes <float> (default 0.5)
     QCommandLineOption lowerResOption(
         QStringList() << "lr" << "lowerRes",
@@ -221,6 +229,8 @@ public:
       std::cerr << "Error: --nthreads must be an integer >= 2.\n";
       std::exit(-1);
     }
+    opts.automaticThreads =
+        parser.isSet(nthreadsOption) ? false : defaults.automaticThreads;
 
     opts.strength = parser.value(strengthOption).toFloat(&ok);
     if (!ok) {
@@ -270,6 +280,12 @@ public:
     opts.temporalSmooth = parser.value(temporalSmoothOption).toFloat(&ok);
     if (!ok) {
       std::cerr << "Error: --temporalSmooth must be a float.\n";
+      std::exit(-1);
+    }
+
+    opts.personSensitivity = parser.value(personSensitivityOption).toInt(&ok);
+    if (!ok || opts.personSensitivity < 0 || opts.personSensitivity > 100) {
+      std::cerr << "Error: --personSensitivity must be between 0 and 100.\n";
       std::exit(-1);
     }
 

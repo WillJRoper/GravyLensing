@@ -24,6 +24,7 @@
 #include "settings_dialog.hpp"
 
 #include <QColorDialog>
+#include <QButtonGroup>
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFont>
@@ -36,7 +37,13 @@
 #include <QScrollArea>
 #include <QSlider>
 #include <QSizePolicy>
+#include <QTimer>
 #include <QVBoxLayout>
+
+#ifdef __APPLE__
+#include "avfoundation_camera.hpp"
+#endif
+#include "backgrounds.hpp"
 
 static QDoubleSpinBox *makeDoubleSpin(double min, double max, double step,
                                        int decimals, const QString &suffix,
@@ -78,11 +85,19 @@ static QCheckBox *makeCheck(const QString &text, const QString &tooltip) {
 }
 
 static QLabel *makeFormLabel(const QString &text, const QString &tooltip,
-                             QWidget *buddy = nullptr) {
+                              QWidget *buddy = nullptr) {
   auto *label = new QLabel(text);
   label->setToolTip(tooltip);
   if (buddy != nullptr)
     label->setBuddy(buddy);
+  return label;
+}
+
+static QLabel *makeDescription(const QString &text) {
+  auto *label = new QLabel(text);
+  label->setWordWrap(true);
+  label->setForegroundRole(QPalette::PlaceholderText);
+  label->setContentsMargins(24, 0, 0, 4);
   return label;
 }
 
@@ -144,8 +159,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   contentLayout->addWidget(heading);
 
   auto *summary = new QLabel(
-      "Choose the mask source first, then tune the relevant settings below. "
-      "Changes apply when you start or restart the session.");
+      "Choose how to detect the lensing subject, then start with the recommended "
+      "defaults. You can refine the effect later from Session Settings.");
   summary->setWordWrap(true);
   summary->setForegroundRole(QPalette::PlaceholderText);
   contentLayout->addWidget(summary);
@@ -169,16 +184,33 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   auto *cameraForm = new QFormLayout(cameraGroup);
   configureFormLayout(cameraForm);
 
+#ifdef __APPLE__
+  cameraCombo_ = new QComboBox;
+  cameraCombo_->setToolTip(
+      "Camera used for the live feed. Built-in and connected cameras are "
+      "listed by their macOS names.");
+  refreshCameras();
+  const int savedCamera = cameraCombo_->findData(settings.deviceIndex);
+  if (savedCamera >= 0)
+    cameraCombo_->setCurrentIndex(savedCamera);
+  auto *cameraTimer = new QTimer(this);
+  connect(cameraTimer, &QTimer::timeout, this,
+          &SettingsDialog::refreshCameras);
+  cameraTimer->start(1000);
+  addFormRow(cameraForm, "Camera", cameraCombo_->toolTip(), cameraCombo_);
+#else
   deviceIndexSpin_ = makeIntSpin(0, 99, 1, {},
-      "Which camera device to open (0 is the built-in webcam).");
+      "Camera 0 is normally the built-in camera. Try 1 or 2 only when the "
+      "wrong camera opens.");
   deviceIndexSpin_->setValue(settings.deviceIndex);
-  addFormRow(cameraForm, "Device index", deviceIndexSpin_->toolTip(),
+  addFormRow(cameraForm, "Camera number", deviceIndexSpin_->toolTip(),
              deviceIndexSpin_);
+#endif
 
   fpsCombo_ = new QComboBox;
   fpsCombo_->setToolTip(
-      "Target camera frame rate.  The camera is configured for the closest "
-      "available rate at or above the chosen value.");
+      "Requested camera frame rate. 30 fps is recommended; lower it if the "
+      "effect stutters, or use 60 fps only with a capable camera.");
   const int fpsOptions[] = {5, 10, 15, 20, 24, 25, 30, 60};
   for (const int f : fpsOptions) {
     fpsCombo_->addItem(QString("%1 fps").arg(f), f);
@@ -194,11 +226,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   addFormRow(cameraForm, "Flip", flipCheck_->toolTip(), flipCheck_);
 
   selectROICheck_ = makeCheck("Show region selector at startup",
-      "On the next pipeline start, open an interactive ROI selection "
-      "window.");
+      "Ask you to select a camera region when the session starts. Leave this "
+      "off to use the full frame.");
   selectROICheck_->setChecked(settings.selectROI);
-  addFormRow(cameraForm, "Region of interest", selectROICheck_->toolTip(),
-             selectROICheck_);
 
   leftColumn->addWidget(cameraGroup);
 
@@ -220,7 +250,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   roiLayout->addWidget(roiInfoLabel_);
 
   auto *roiBtnRow = new QHBoxLayout;
-  auto *selectRoiBtn = new QPushButton("Select Region...");
+  auto *selectRoiBtn = new QPushButton("Select New Region from Camera...");
   selectRoiBtn->setToolTip(
       "Open the interactive region selector on the camera feed.");
   connect(selectRoiBtn, &QPushButton::clicked, this, [this]() {
@@ -229,11 +259,13 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   });
   roiBtnRow->addWidget(selectRoiBtn);
 
-  auto *clearRoiBtn = new QPushButton("Clear");
-  clearRoiBtn->setToolTip("Remove the current region, reverting to full frame.");
+  auto *clearRoiBtn = new QPushButton("Use Full Frame");
+  clearRoiBtn->setToolTip(
+      "Remove the current region and use the entire camera image.");
   clearRoiBtn->setEnabled(hasROI_);
   connect(clearRoiBtn, &QPushButton::clicked, this, [this]() {
     hasROI_ = false;
+    roiClearRequested_ = true;
     roiX_ = roiY_ = roiW_ = roiH_ = 0;
     roiInfoLabel_->setText("No region selected — full frame in use.");
     auto *btn = qobject_cast<QPushButton *>(sender());
@@ -244,26 +276,50 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   leftColumn->addWidget(roiGroup);
 
   // ── Mode (mask type selection) ─────────────────────────────────────
-  auto *modeGroup = new QGroupBox("Mode");
-  auto *modeForm = new QFormLayout(modeGroup);
-  configureFormLayout(modeForm);
+  auto *modeGroup = new QGroupBox("Subject Detection");
+  auto *modeLayout = new QVBoxLayout(modeGroup);
+  auto *modeButtons = new QButtonGroup(modeGroup);
 
-  maskModeCombo_ = new QComboBox;
+  personDetectionRadio_ = new QRadioButton("People (Recommended)");
 #ifdef __APPLE__
-  maskModeCombo_->setToolTip(
-      "Person uses Apple Vision; Color tracks a user-selected HSV colour.");
+  personDetectionRadio_->setToolTip(
+      "Automatically detect people with Apple Vision. No colour selection or "
+      "model file is required.");
 #else
-  maskModeCombo_->setToolTip(
-      "Person uses an AI segmentation model; Color tracks a user-selected "
-      "HSV colour.");
+  personDetectionRadio_->setToolTip(
+      "Automatically detect people with the configured segmentation model.");
 #endif
-  maskModeCombo_->addItem("Person (AI segmentation)", "person");
-  maskModeCombo_->addItem("Color tracking", "color");
-  if (settings.maskMode == "color")
-    maskModeCombo_->setCurrentIndex(1);
-  addFormRow(modeForm, "Mask mode", maskModeCombo_->toolTip(),
-             maskModeCombo_);
-  leftColumn->addWidget(modeGroup);
+  modeButtons->addButton(personDetectionRadio_);
+  modeLayout->addWidget(personDetectionRadio_);
+
+  auto *personDescription = new QLabel(
+      "Automatically finds people in the camera image. Best starting point "
+      "and requires no manual setup.");
+  personDescription->setWordWrap(true);
+  personDescription->setForegroundRole(QPalette::PlaceholderText);
+  personDescription->setContentsMargins(24, 0, 0, 8);
+  personDescription->setToolTip(personDetectionRadio_->toolTip());
+  modeLayout->addWidget(personDescription);
+
+  colorDetectionRadio_ = new QRadioButton("A selected colour");
+  colorDetectionRadio_->setToolTip(
+      "Lens pixels matching a colour selected from the camera. Useful for "
+      "objects, clothing, props, and green-screen-style effects.");
+  modeButtons->addButton(colorDetectionRadio_);
+  modeLayout->addWidget(colorDetectionRadio_);
+
+  auto *colorDescription = new QLabel(
+      "Choose a colour from the live camera after starting. Best for tracking "
+      "an object or coloured area instead of a person.");
+  colorDescription->setWordWrap(true);
+  colorDescription->setForegroundRole(QPalette::PlaceholderText);
+  colorDescription->setContentsMargins(24, 0, 0, 0);
+  colorDescription->setToolTip(colorDetectionRadio_->toolTip());
+  modeLayout->addWidget(colorDescription);
+
+  colorDetectionRadio_->setChecked(settings.maskMode == "color");
+  personDetectionRadio_->setChecked(settings.maskMode != "color");
+  leftColumn->insertWidget(0, modeGroup);
 
   // ── Person Detection group ──────────────────────────────────────────
   auto *personGroup = new QGroupBox("Person Detection");
@@ -295,17 +351,36 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   }
 
   modelSizeSpin_ = makeIntSpin(128, 1024, 128, " px",
-      "Larger models capture finer mask detail but run slower.");
+      "Advanced: working resolution used for person detection. Larger values "
+      "can improve edges but reduce frame rate.");
   modelSizeSpin_->setValue(settings.modelSize);
-  addFormRow(personForm, "Model size", modelSizeSpin_->toolTip(),
-             modelSizeSpin_);
+  auto *modelSizeSlider = new QSlider(Qt::Horizontal);
+  modelSizeSlider->setRange(128, 1024);
+  modelSizeSlider->setSingleStep(32);
+  modelSizeSlider->setPageStep(128);
+  modelSizeSlider->setValue(settings.modelSize);
+  modelSizeSlider->setToolTip(modelSizeSpin_->toolTip());
+  auto *modelSizeLabel = new QLabel(QString("%1 px").arg(settings.modelSize));
+  modelSizeLabel->setMinimumWidth(54);
+  auto *modelSizeRow = new QHBoxLayout;
+  modelSizeRow->addWidget(modelSizeSlider, 1);
+  modelSizeRow->addWidget(modelSizeLabel);
+  addFormRow(personForm, "Detection detail", modelSizeSpin_->toolTip(),
+             modelSizeRow);
+  connect(modelSizeSlider, &QSlider::valueChanged, modelSizeSpin_,
+          &QSpinBox::setValue);
+  connect(modelSizeSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+          [modelSizeSlider, modelSizeLabel](int value) {
+            modelSizeSlider->setValue(value);
+            modelSizeLabel->setText(QString("%1 px").arg(value));
+          });
 
   qualityModeCombo_ = new QComboBox;
   qualityModeCombo_->setToolTip(
-      "Preset tradeoff for the Vision request quality, segmentation working "
-      "resolution, temporal stabilization, and lens mass softening.");
+      "Controls the quality and speed of person detection. Balanced is the "
+      "recommended starting point for Apple Silicon Macs.");
   qualityModeCombo_->addItem("Fast", "fast");
-  qualityModeCombo_->addItem("Balanced", "balanced");
+  qualityModeCombo_->addItem("Balanced (Recommended)", "balanced");
   qualityModeCombo_->addItem("High Quality", "high");
   qualityModeCombo_->addItem("Custom", "custom");
   {
@@ -317,11 +392,55 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
              qualityModeCombo_);
 
   temporalSmoothSpin_ = makeDoubleSpin(0.0, 1.0, 0.05, 2, {},
-      "Higher values blend the mask more heavily with the previous frame, "
-      "reducing flicker at the cost of responsiveness.");
+      "Advanced: higher values reduce mask flicker but make detection respond "
+      "more slowly to movement.");
   temporalSmoothSpin_->setValue(static_cast<double>(settings.temporalSmooth));
-  addFormRow(personForm, "Temporal smooth", temporalSmoothSpin_->toolTip(),
-             temporalSmoothSpin_);
+  auto *stabilizationSlider = new QSlider(Qt::Horizontal);
+  stabilizationSlider->setRange(0, 100);
+  stabilizationSlider->setSingleStep(5);
+  stabilizationSlider->setValue(
+      static_cast<int>(std::round(settings.temporalSmooth * 100.0f)));
+  stabilizationSlider->setToolTip(temporalSmoothSpin_->toolTip());
+  auto *stabilizationLabel =
+      new QLabel(QString("%1%").arg(stabilizationSlider->value()));
+  stabilizationLabel->setMinimumWidth(40);
+  auto *stabilizationRow = new QHBoxLayout;
+  stabilizationRow->addWidget(stabilizationSlider, 1);
+  stabilizationRow->addWidget(stabilizationLabel);
+  addFormRow(personForm, "Mask stability", temporalSmoothSpin_->toolTip(),
+             stabilizationRow);
+  connect(stabilizationSlider, &QSlider::valueChanged, this,
+          [this](int value) {
+            temporalSmoothSpin_->setValue(static_cast<double>(value) / 100.0);
+          });
+  connect(temporalSmoothSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
+          this, [stabilizationSlider, stabilizationLabel](double value) {
+            const int percent = static_cast<int>(std::round(value * 100.0));
+            stabilizationSlider->setValue(percent);
+            stabilizationLabel->setText(QString("%1%").arg(percent));
+          });
+
+  personSensitivitySlider_ = new QSlider(Qt::Horizontal);
+  personSensitivitySlider_->setRange(0, 100);
+  personSensitivitySlider_->setValue(settings.personSensitivity);
+  personSensitivitySlider_->setToolTip(
+      "Increase to detect smaller, distant, or partially visible people. "
+      "Decrease if background objects are detected as people.");
+  auto *sensitivityLabel = new QLabel;
+  sensitivityLabel->setMinimumWidth(62);
+  const auto updateSensitivityLabel = [sensitivityLabel](int value) {
+    sensitivityLabel->setText(value < 35 ? "Strict"
+                              : value > 65 ? "Sensitive"
+                                           : "Standard");
+  };
+  updateSensitivityLabel(settings.personSensitivity);
+  auto *sensitivityRow = new QHBoxLayout;
+  sensitivityRow->addWidget(personSensitivitySlider_, 1);
+  sensitivityRow->addWidget(sensitivityLabel);
+  addFormRow(personForm, "Sensitivity", personSensitivitySlider_->toolTip(),
+             sensitivityRow);
+  connect(personSensitivitySlider_, &QSlider::valueChanged, this,
+          updateSensitivityLabel);
 
   leftColumn->addWidget(personGroup);
 
@@ -387,35 +506,105 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   auto *colorForm = new QFormLayout;
   configureFormLayout(colorForm);
 
-  colorModeTypeCombo_ = new QComboBox;
-  colorModeTypeCombo_->setToolTip(
-      "Fixed Color Key thresholds the target HSV range directly. "
-      "Tracked Color Blob adds blob-tracking heuristics.");
-  colorModeTypeCombo_->addItem("Fixed Color Key", "fixed_key");
-  colorModeTypeCombo_->addItem("Tracked Color Blob", "tracked_blob");
-  if (settings.colorModeType == "tracked_blob")
-    colorModeTypeCombo_->setCurrentIndex(1);
-  addFormRow(colorForm, "Mode", colorModeTypeCombo_->toolTip(),
-             colorModeTypeCombo_);
+  auto *colorModeButtons = new QButtonGroup(colorGroup);
+  fixedColorRadio_ = new QRadioButton("Match every pixel (Recommended)");
+  fixedColorRadio_->setToolTip(
+      "Lens every pixel matching the selected colour. Best for coloured areas, "
+      "clothing, and green-screen-style effects.");
+  trackedColorRadio_ = new QRadioButton("Track one coloured object");
+  trackedColorRadio_->setToolTip(
+      "Follow one connected object matching the selected colour. Use when other "
+      "parts of the scene contain similar colours.");
+  colorModeButtons->addButton(fixedColorRadio_);
+  colorModeButtons->addButton(trackedColorRadio_);
+  fixedColorRadio_->setChecked(settings.colorModeType != "tracked_blob");
+  trackedColorRadio_->setChecked(settings.colorModeType == "tracked_blob");
+  colorLayout->addWidget(fixedColorRadio_);
+  colorLayout->addWidget(makeDescription(
+      "Lenses all matching areas. Most predictable and easiest to set up."));
+  colorLayout->addWidget(trackedColorRadio_);
+  colorLayout->addWidget(makeDescription(
+      "Follows one object when the scene contains several similar colours."));
 
   colorHueTolSpin_ = makeIntSpin(1, 90, 1, {},
-      "Wider values include more hues around the target. "
-      "Hue wraps at 0/180.");
+      "How much colour variation to accept. Increase when parts of the object "
+      "are missed; decrease when unrelated colours are included.");
   colorHueTolSpin_->setValue(settings.colorHueTol);
-  addFormRow(colorForm, "Hue tolerance", colorHueTolSpin_->toolTip(),
-             colorHueTolSpin_);
+  auto *hueSlider = new QSlider(Qt::Horizontal);
+  hueSlider->setRange(1, 90);
+  hueSlider->setValue(settings.colorHueTol);
+  hueSlider->setToolTip(colorHueTolSpin_->toolTip());
+  auto *hueLabel = new QLabel;
+  hueLabel->setMinimumWidth(56);
+  const auto updateHueLabel = [hueLabel](int value) {
+    hueLabel->setText(value < 10 ? "Narrow" : value > 24 ? "Wide" : "Standard");
+  };
+  updateHueLabel(settings.colorHueTol);
+  auto *hueRow = new QHBoxLayout;
+  hueRow->addWidget(hueSlider, 1);
+  hueRow->addWidget(hueLabel);
+  addFormRow(colorForm, "Colour range", hueSlider->toolTip(), hueRow);
+  connect(hueSlider, &QSlider::valueChanged, colorHueTolSpin_,
+          &QSpinBox::setValue);
+  connect(hueSlider, &QSlider::valueChanged, this, updateHueLabel);
+  connect(colorHueTolSpin_, qOverload<int>(&QSpinBox::valueChanged), hueSlider,
+          &QSlider::setValue);
 
   colorSatTolSpin_ = makeIntSpin(1, 255, 5, {},
-      "Wider values include more saturation variation.");
+      "How much vividness variation to accept. Increase for uneven lighting; "
+      "decrease when grey areas are included.");
   colorSatTolSpin_->setValue(settings.colorSatTol);
-  addFormRow(colorForm, "Saturation tolerance", colorSatTolSpin_->toolTip(),
-             colorSatTolSpin_);
+  auto *saturationSlider = new QSlider(Qt::Horizontal);
+  saturationSlider->setRange(1, 255);
+  saturationSlider->setValue(settings.colorSatTol);
+  saturationSlider->setToolTip(colorSatTolSpin_->toolTip());
+  auto *saturationLabel = new QLabel;
+  saturationLabel->setMinimumWidth(56);
+  const auto updateSaturationLabel = [saturationLabel](int value) {
+    saturationLabel->setText(value < 45 ? "Narrow"
+                             : value > 100 ? "Wide"
+                                           : "Standard");
+  };
+  updateSaturationLabel(settings.colorSatTol);
+  auto *saturationRow = new QHBoxLayout;
+  saturationRow->addWidget(saturationSlider, 1);
+  saturationRow->addWidget(saturationLabel);
+  addFormRow(colorForm, "Vividness range", saturationSlider->toolTip(),
+             saturationRow);
+  connect(saturationSlider, &QSlider::valueChanged, colorSatTolSpin_,
+          &QSpinBox::setValue);
+  connect(saturationSlider, &QSlider::valueChanged, this,
+          updateSaturationLabel);
+  connect(colorSatTolSpin_, qOverload<int>(&QSpinBox::valueChanged),
+          saturationSlider, &QSlider::setValue);
 
   colorValTolSpin_ = makeIntSpin(1, 255, 5, {},
-      "Wider values include more brightness variation.");
+      "How much brightness variation to accept. Increase when shadows or "
+      "highlights create holes in the mask.");
   colorValTolSpin_->setValue(settings.colorValTol);
-  addFormRow(colorForm, "Value tolerance", colorValTolSpin_->toolTip(),
-             colorValTolSpin_);
+  auto *brightnessSlider = new QSlider(Qt::Horizontal);
+  brightnessSlider->setRange(1, 255);
+  brightnessSlider->setValue(settings.colorValTol);
+  brightnessSlider->setToolTip(colorValTolSpin_->toolTip());
+  auto *brightnessLabel = new QLabel;
+  brightnessLabel->setMinimumWidth(56);
+  const auto updateBrightnessLabel = [brightnessLabel](int value) {
+    brightnessLabel->setText(value < 60 ? "Narrow"
+                             : value > 120 ? "Wide"
+                                           : "Standard");
+  };
+  updateBrightnessLabel(settings.colorValTol);
+  auto *brightnessRow = new QHBoxLayout;
+  brightnessRow->addWidget(brightnessSlider, 1);
+  brightnessRow->addWidget(brightnessLabel);
+  addFormRow(colorForm, "Brightness range", brightnessSlider->toolTip(),
+             brightnessRow);
+  connect(brightnessSlider, &QSlider::valueChanged, colorValTolSpin_,
+          &QSpinBox::setValue);
+  connect(brightnessSlider, &QSlider::valueChanged, this,
+          updateBrightnessLabel);
+  connect(colorValTolSpin_, qOverload<int>(&QSpinBox::valueChanged),
+          brightnessSlider, &QSlider::setValue);
 
   // Current target preview (click opens QColorDialog)
   {
@@ -443,10 +632,19 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   }
 
   colorLayout->addLayout(colorForm);
+  auto *pickFromCamera = new QPushButton("Pick Colour from Camera...");
+  pickFromCamera->setToolTip(
+      "Close settings and click the target colour in the live camera image.");
+  connect(pickFromCamera, &QPushButton::clicked, this, [this]() {
+    colorFramePickRequested_ = true;
+    accept();
+  });
+  colorLayout->addWidget(pickFromCamera);
   auto *colorNote = new QLabel(
-      "Choose or re-choose the keyed colour with Shift+S or "
-      "File > Select Color...");
+      "The camera picker gives the best result because it measures the target "
+      "under the current lighting. The swatch above is a manual fallback.");
   colorNote->setWordWrap(true);
+  colorNote->setForegroundRole(QPalette::PlaceholderText);
   colorLayout->addWidget(colorNote);
   leftColumn->addWidget(colorGroup);
   leftColumn->addStretch(1);
@@ -457,31 +655,64 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   configureFormLayout(lensForm);
 
   strengthSpin_ = makeDoubleSpin(0.0, 10.0, 0.05, 2, {},
-      "Strength multiplier applied to the deflection field. Larger "
-      "values produce more dramatic lensing.");
+      "Controls how strongly the background bends around the subject. Larger "
+      "values create a more dramatic effect.");
   strengthSpin_->setValue(static_cast<double>(settings.strength));
-  addFormRow(lensForm, "Strength", strengthSpin_->toolTip(), strengthSpin_);
+  auto *strengthSlider = new QSlider(Qt::Horizontal);
+  strengthSlider->setRange(0, 1000);
+  strengthSlider->setValue(static_cast<int>(settings.strength * 100.0f));
+  strengthSlider->setToolTip(strengthSpin_->toolTip());
+  auto *strengthLabel = new QLabel(QString::number(settings.strength, 'f', 1));
+  strengthLabel->setMinimumWidth(40);
+  auto *strengthRow = new QHBoxLayout;
+  strengthRow->addWidget(strengthSlider, 1);
+  strengthRow->addWidget(strengthLabel);
+  addFormRow(lensForm, "Effect strength", strengthSlider->toolTip(),
+             strengthRow);
+  connect(strengthSlider, &QSlider::valueChanged, this, [this](int value) {
+    strengthSpin_->setValue(static_cast<double>(value) / 100.0);
+  });
+  connect(strengthSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+          [strengthSlider, strengthLabel](double value) {
+            strengthSlider->setValue(static_cast<int>(std::round(value * 100.0)));
+            strengthLabel->setText(QString::number(value, 'f', 1));
+          });
 
   softeningSpin_ = makeDoubleSpin(0.0, 200.0, 1.0, 0, " px",
-      "Softens the deflection kernel so nearby background pixels are "
-      "affected more smoothly.");
+      "Controls the width and smoothness of the bend around the subject. Larger "
+      "values spread the effect over a wider area.");
   softeningSpin_->setValue(static_cast<double>(settings.softening));
-  addFormRow(lensForm, "Softening radius", softeningSpin_->toolTip(),
-             softeningSpin_);
+  auto *widthSlider = new QSlider(Qt::Horizontal);
+  widthSlider->setRange(0, 200);
+  widthSlider->setValue(static_cast<int>(settings.softening));
+  widthSlider->setToolTip(softeningSpin_->toolTip());
+  auto *widthLabel = new QLabel(QString("%1 px").arg(settings.softening, 0, 'f', 0));
+  widthLabel->setMinimumWidth(48);
+  auto *widthRow = new QHBoxLayout;
+  widthRow->addWidget(widthSlider, 1);
+  widthRow->addWidget(widthLabel);
+  addFormRow(lensForm, "Effect width", widthSlider->toolTip(), widthRow);
+  connect(widthSlider, &QSlider::valueChanged, this, [this](int value) {
+    softeningSpin_->setValue(static_cast<double>(value));
+  });
+  connect(softeningSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+          [widthSlider, widthLabel](double value) {
+            widthSlider->setValue(static_cast<int>(std::round(value)));
+            widthLabel->setText(QString("%1 px").arg(value, 0, 'f', 0));
+          });
 
   padFactorSpin_ = makeIntSpin(1, 10, 1, {},
-      "FFT padding multiplier. Larger values reduce wrap-around "
-      "artifacts but use more memory.");
+      "Advanced: extra calculation space used to prevent edge wrap-around. "
+      "Increase only if distortion appears on the opposite screen edge.");
   padFactorSpin_->setValue(settings.padFactor);
-  addFormRow(lensForm, "FFT pad factor", padFactorSpin_->toolTip(),
-             padFactorSpin_);
 
   lowerResSpin_ = makeDoubleSpin(0.1, 1.0, 0.1, 2, {},
-      "Fraction of the background resolution at which lensing is "
-      "computed. 1.0 = full resolution; 0.5 = half resolution (faster).");
+      "Rendering resolution for the lens effect. Lower values run faster; 1.0 "
+      "is sharpest but uses the most processing power.");
   lowerResSpin_->setValue(static_cast<double>(settings.lowerRes));
+  QHBoxLayout *lowerResRow = nullptr;
   {
-    auto *row = new QHBoxLayout;
+    lowerResRow = new QHBoxLayout;
     auto *lowerResSlider = new QSlider(Qt::Horizontal);
     lowerResSlider->setRange(10, 100);
     lowerResSlider->setSingleStep(5);
@@ -489,8 +720,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     lowerResSlider->setToolTip(lowerResSpin_->toolTip());
     lowerResSlider->setValue(
         static_cast<int>(std::round(lowerResSpin_->value() * 100.0)));
-    row->addWidget(lowerResSlider, 1);
-    row->addWidget(lowerResSpin_);
+    lowerResRow->addWidget(lowerResSlider, 1);
+    lowerResRow->addWidget(lowerResSpin_);
 
     connect(lowerResSlider, &QSlider::valueChanged, this,
             [this](int value) {
@@ -509,15 +740,14 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
               syncQualityModeFromControls();
             });
 
-    addFormRow(lensForm, "Resolution scale", lowerResSpin_->toolTip(), row);
   }
 
-  distortInsideCheck_ = makeCheck("Distort inside the mask",
-      "When enabled, the interior of the mask is also lensed (not only "
-      "the background around it).");
-  distortInsideCheck_->setChecked(settings.distortInside);
-  addFormRow(lensForm, "Inside mask", distortInsideCheck_->toolTip(),
-             distortInsideCheck_);
+  distortInsideCheck_ = makeCheck("Keep the subject interior clear",
+      "Leave the detected subject area undistorted while bending the background "
+      "around it. Turn off to distort the entire detected area.");
+  distortInsideCheck_->setChecked(!settings.distortInside);
+  addFormRow(lensForm, "Subject appearance", distortInsideCheck_->toolTip(),
+              distortInsideCheck_);
 
   rightColumn->addWidget(lensGroup);
 
@@ -526,8 +756,22 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   auto *bgForm = new QFormLayout(bgGroup);
   configureFormLayout(bgForm);
 
+  includedBackgroundsRadio_ = new QRadioButton("Included backgrounds");
+  includedBackgroundsRadio_->setToolTip(
+      "Use the background collection packaged with GravyLensing.");
+  customBackgroundsRadio_ = new QRadioButton("Custom folder");
+  customBackgroundsRadio_->setToolTip(
+      "Use supported images from a folder on this Mac.");
+  auto *backgroundSource = new QVBoxLayout;
+  backgroundSource->addWidget(includedBackgroundsRadio_);
+  backgroundSource->addWidget(customBackgroundsRadio_);
+  addFormRow(bgForm, "Source",
+             "Choose the included collection or a folder of your own images.",
+             backgroundSource);
+
+  QHBoxLayout *backgroundFolderRow = nullptr;
   {
-    auto *row = new QHBoxLayout;
+    backgroundFolderRow = new QHBoxLayout;
     backgroundsDirEdit_ =
         new QLineEdit(QString::fromStdString(settings.backgroundsDir));
     backgroundsDirEdit_->setSizePolicy(QSizePolicy::Expanding,
@@ -538,21 +782,44 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     browseBgBtn_ = new QPushButton("Browse...");
     browseBgBtn_->setToolTip(
         "Select a folder containing background images.");
-    row->addWidget(backgroundsDirEdit_, 1);
-    row->addWidget(browseBgBtn_);
-    addFormRow(bgForm, "Directory",
-               "Folder containing the backgrounds exposed in the UI.", row);
+    backgroundFolderRow->addWidget(backgroundsDirEdit_, 1);
+    backgroundFolderRow->addWidget(browseBgBtn_);
+    addFormRow(bgForm, "Custom folder",
+                "Folder scanned for background images. Use Browse to choose "
+                "your own collection; Restore Defaults returns to built-ins.",
+                backgroundFolderRow);
     connect(browseBgBtn_, &QPushButton::clicked, this, [this]() {
       const QString dir = QFileDialog::getExistingDirectory(
           this, "Select Backgrounds Folder", backgroundsDirEdit_->text());
       if (!dir.isEmpty()) {
+        customBackgroundsRadio_->setChecked(true);
         backgroundsDirEdit_->setText(dir);
         backgroundsDirEdit_->setToolTip(dir);
       }
     });
     connect(backgroundsDirEdit_, &QLineEdit::textChanged, this,
-            [this](const QString &t) { backgroundsDirEdit_->setToolTip(t); });
+            [this](const QString &t) {
+              backgroundsDirEdit_->setToolTip(t);
+              updateBackgroundStatus();
+            });
   }
+
+  backgroundStatus_ = new QLabel;
+  backgroundStatus_->setWordWrap(true);
+  backgroundStatus_->setForegroundRole(QPalette::PlaceholderText);
+  bgForm->addRow({}, backgroundStatus_);
+  const bool includedBackgrounds =
+      settings.backgroundsDir == AppSettings().backgroundsDir;
+  includedBackgroundsRadio_->setChecked(includedBackgrounds);
+  customBackgroundsRadio_->setChecked(!includedBackgrounds);
+  const auto syncBackgroundSource = [=]() {
+    bgForm->setRowVisible(backgroundFolderRow,
+                          customBackgroundsRadio_->isChecked());
+    updateBackgroundStatus();
+  };
+  connect(customBackgroundsRadio_, &QRadioButton::toggled, this,
+          [syncBackgroundSource](bool) { syncBackgroundSource(); });
+  syncBackgroundSource();
 
   autoCycleCheck_ = new QCheckBox("Auto-cycle backgrounds");
   autoCycleCheck_->setToolTip(
@@ -567,7 +834,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   secondsPerBackgroundSpin_->setSingleStep(5);
   secondsPerBackgroundSpin_->setSuffix(" s");
   secondsPerBackgroundSpin_->setToolTip(
-      "Seconds between automatic background changes.");
+      "How long each background remains visible before moving to the next.");
   secondsPerBackgroundSpin_->setValue(
       std::max(1, settings.secondsPerBackground));
   secondsPerBackgroundSpin_->setEnabled(settings.secondsPerBackground > 0);
@@ -579,20 +846,81 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   rightColumn->addWidget(bgGroup);
 
   // ── Performance group ───────────────────────────────────────────────
-  auto *perfGroup = new QGroupBox("Performance");
+  auto *perfGroup = new QGroupBox("Advanced");
   auto *perfForm = new QFormLayout(perfGroup);
   configureFormLayout(perfForm);
 
   nthreadsSpin_ = makeIntSpin(2, 256, 1, {},
-      "Number of CPU worker threads (Qt reserves 3; the remainder are "
-      "used for FFT and segmentation work).");
+      "Advanced: total CPU threads available to processing. Leave this at the "
+      "default unless performance testing shows a reason to change it.");
   nthreadsSpin_->setValue(settings.nthreads);
-  addFormRow(perfForm, "CPU threads", nthreadsSpin_->toolTip(),
-             nthreadsSpin_);
+  automaticThreadsCheck_ = new QCheckBox(
+      QString("Automatic (%1 threads)").arg(AppSettings::recommendedThreads()));
+  automaticThreadsCheck_->setToolTip(
+      "Use the Mac's available processor cores automatically. Recommended for "
+      "nearly all users.");
+  automaticThreadsCheck_->setChecked(settings.automaticThreads);
+  nthreadsSpin_->setVisible(!settings.automaticThreads);
+  auto *threadRow = new QHBoxLayout;
+  threadRow->addWidget(automaticThreadsCheck_);
+  threadRow->addWidget(nthreadsSpin_);
+  threadRow->addStretch(1);
+  addFormRow(perfForm, "CPU allocation", automaticThreadsCheck_->toolTip(),
+             threadRow);
+  connect(automaticThreadsCheck_, &QCheckBox::toggled, nthreadsSpin_,
+          [this](bool automatic) {
+            nthreadsSpin_->setVisible(!automatic);
+            if (automatic)
+              nthreadsSpin_->setValue(AppSettings::recommendedThreads());
+          });
+
+  auto *paddingCombo = new QComboBox;
+  paddingCombo->setToolTip(
+      "Extra calculation space that prevents distortion wrapping around screen "
+      "edges. Standard is recommended; larger values use much more memory.");
+  paddingCombo->addItem("Standard (Recommended)", 2);
+  paddingCombo->addItem("Extra", 3);
+  paddingCombo->addItem("Maximum", 4);
+  paddingCombo->addItem("Custom...", -1);
+  const int paddingPreset = paddingCombo->findData(settings.padFactor);
+  paddingCombo->setCurrentIndex(
+      paddingPreset >= 0 ? paddingPreset : paddingCombo->count() - 1);
+  padFactorSpin_->setVisible(paddingPreset < 0);
+  auto *paddingRow = new QHBoxLayout;
+  paddingRow->addWidget(paddingCombo, 1);
+  paddingRow->addWidget(padFactorSpin_);
+  addFormRow(perfForm, "Edge protection", paddingCombo->toolTip(), paddingRow);
+  connect(paddingCombo, &QComboBox::currentIndexChanged, this,
+          [this, paddingCombo](int) {
+            const int factor = paddingCombo->currentData().toInt();
+            padFactorSpin_->setVisible(factor < 0);
+            if (factor > 0)
+              padFactorSpin_->setValue(factor);
+          });
+  connect(padFactorSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+          [paddingCombo](int value) {
+            const int preset = paddingCombo->findData(value);
+            QSignalBlocker blocker(paddingCombo);
+            paddingCombo->setCurrentIndex(
+                preset >= 0 ? preset : paddingCombo->count() - 1);
+          });
+  addFormRow(perfForm, "Render resolution", lowerResSpin_->toolTip(),
+             lowerResRow);
+
+  const auto syncCustomQualityControls = [=]() {
+    const bool custom =
+        qualityModeCombo_->currentData().toString() == QLatin1String("custom");
+    personForm->setRowVisible(modelSizeRow, custom);
+    personForm->setRowVisible(stabilizationRow, custom);
+    perfForm->setRowVisible(lowerResRow, custom);
+  };
+  connect(qualityModeCombo_, &QComboBox::currentIndexChanged, this,
+          [syncCustomQualityControls](int) { syncCustomQualityControls(); });
+  syncCustomQualityControls();
 
   debugGridCheck_ = makeCheck("Show diagnostic grid",
       "Display the 2×2 debug view (camera, mask, background, lensed) "
-      "instead of the lensed-only view.");
+      "instead of the final effect. Useful for setup and troubleshooting.");
   debugGridCheck_->setChecked(settings.debugGrid);
   addFormRow(perfForm, "Debug grid", debugGridCheck_->toolTip(),
              debugGridCheck_);
@@ -601,8 +929,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
 
   // ── Note about restart ──────────────────────────────────────────────
   auto *note = new QLabel(
-      "Session settings are applied when you start or restart the session.\n"
-      "Color and region selection are manual actions from the File menu.");
+      "Tip: start with Person Detection and Balanced quality. During a session, "
+      "use the arrow keys to change backgrounds and Cmd+, to return here.");
   note->setWordWrap(true);
   note->setStyleSheet(
       "QLabel { color: #888; font-size: 11px; padding-top: 6px; }");
@@ -610,15 +938,12 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   rightColumn->addStretch(1);
 
   const auto syncModeGroups = [=]() {
-    const bool colorMode =
-        maskModeCombo_->currentData().toString() == QLatin1String("color");
-    personGroup->setEnabled(!colorMode);
-    colorGroup->setEnabled(colorMode);
-    personGroup->setFlat(colorMode);
-    colorGroup->setFlat(!colorMode);
+    const bool colorMode = colorDetectionRadio_->isChecked();
+    personGroup->setVisible(!colorMode);
+    colorGroup->setVisible(colorMode);
   };
-  connect(maskModeCombo_, &QComboBox::currentIndexChanged, this,
-          [=](int) { syncModeGroups(); });
+  connect(colorDetectionRadio_, &QRadioButton::toggled, this,
+          [=](bool) { syncModeGroups(); });
   syncModeGroups();
 
   // ── Button box ──────────────────────────────────────────────────────
@@ -627,19 +952,32 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
       QDialogButtonBox::Cancel);
   buttons->button(QDialogButtonBox::Ok)->setText(acceptLabel);
   buttons->button(QDialogButtonBox::Ok)->setDefault(true);
+  buttons->button(QDialogButtonBox::Ok)->setToolTip(
+      "Apply these settings and start the camera session.");
+  buttons->button(QDialogButtonBox::Cancel)->setToolTip(
+      "Close without applying these changes.");
+  buttons->button(QDialogButtonBox::RestoreDefaults)->setToolTip(
+      "Reset every setting to the recommended defaults.");
   mainLayout->addWidget(buttons);
 
   connect(buttons->button(QDialogButtonBox::RestoreDefaults),
-          &QPushButton::clicked, this, [this, syncModeGroups]() {
+          &QPushButton::clicked, this,
+          [this, syncModeGroups, paddingCombo]() {
             const AppSettings defaults;
+#ifdef __APPLE__
+            { const int idx = cameraCombo_->findData(defaults.deviceIndex); if (idx >= 0) cameraCombo_->setCurrentIndex(idx); }
+#else
             deviceIndexSpin_->setValue(defaults.deviceIndex);
+#endif
             { const int idx = fpsCombo_->findData(defaults.fps); if (idx >= 0) fpsCombo_->setCurrentIndex(idx); }
             flipCheck_->setChecked(defaults.flip);
             selectROICheck_->setChecked(defaults.selectROI);
-            maskModeCombo_->setCurrentIndex(
-                defaults.maskMode == "color" ? 1 : 0);
-            colorModeTypeCombo_->setCurrentIndex(
-                defaults.colorModeType == "tracked_blob" ? 1 : 0);
+            colorDetectionRadio_->setChecked(defaults.maskMode == "color");
+            personDetectionRadio_->setChecked(defaults.maskMode != "color");
+            trackedColorRadio_->setChecked(
+                defaults.colorModeType == "tracked_blob");
+            fixedColorRadio_->setChecked(
+                defaults.colorModeType != "tracked_blob");
             colorHueTolSpin_->setValue(defaults.colorHueTol);
             colorSatTolSpin_->setValue(defaults.colorSatTol);
             colorValTolSpin_->setValue(defaults.colorValTol);
@@ -649,17 +987,20 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             { const int idx = qualityModeCombo_->findData(QString::fromStdString(defaults.qualityMode)); if (idx >= 0) qualityModeCombo_->setCurrentIndex(idx); }
             temporalSmoothSpin_->setValue(
                 static_cast<double>(defaults.temporalSmooth));
+            personSensitivitySlider_->setValue(defaults.personSensitivity);
             strengthSpin_->setValue(
                 static_cast<double>(defaults.strength));
             softeningSpin_->setValue(
                 static_cast<double>(defaults.softening));
             padFactorSpin_->setValue(defaults.padFactor);
+            automaticThreadsCheck_->setChecked(defaults.automaticThreads);
             lowerResSpin_->setValue(
                 static_cast<double>(defaults.lowerRes));
-            distortInsideCheck_->setChecked(defaults.distortInside);
+            distortInsideCheck_->setChecked(!defaults.distortInside);
             nthreadsSpin_->setValue(defaults.nthreads);
             backgroundsDirEdit_->setText(
                 QString::fromStdString(defaults.backgroundsDir));
+            includedBackgroundsRadio_->setChecked(true);
             autoCycleCheck_->setChecked(defaults.secondsPerBackground > 0);
             secondsPerBackgroundSpin_->setValue(
                 std::max(1, defaults.secondsPerBackground));
@@ -685,13 +1026,18 @@ AppSettings SettingsDialog::settings() const {
   AppSettings s;
   s.modelPath = modelPathEdit_->text().toStdString();
   s.nthreads = nthreadsSpin_->value();
+  s.automaticThreads = automaticThreadsCheck_->isChecked();
+#ifdef __APPLE__
+  s.deviceIndex = cameraCombo_->currentData().toInt();
+#else
   s.deviceIndex = deviceIndexSpin_->value();
+#endif
   s.fps = fpsCombo_->currentData().toInt();
   s.flip = flipCheck_->isChecked();
   s.selectROI = selectROICheck_->isChecked();
-  s.maskMode = maskModeCombo_->currentData().toString().toStdString();
+  s.maskMode = colorDetectionRadio_->isChecked() ? "color" : "person";
   s.colorModeType =
-      colorModeTypeCombo_->currentData().toString().toStdString();
+      trackedColorRadio_->isChecked() ? "tracked_blob" : "fixed_key";
   s.colorHueTol = colorHueTolSpin_->value();
   s.colorSatTol = colorSatTolSpin_->value();
   s.colorValTol = colorValTolSpin_->value();
@@ -700,10 +1046,13 @@ AppSettings SettingsDialog::settings() const {
   s.strength = static_cast<float>(strengthSpin_->value());
   s.softening = static_cast<float>(softeningSpin_->value());
   s.padFactor = padFactorSpin_->value();
-  s.distortInside = distortInsideCheck_->isChecked();
+  s.distortInside = !distortInsideCheck_->isChecked();
   s.temporalSmooth = static_cast<float>(temporalSmoothSpin_->value());
+  s.personSensitivity = personSensitivitySlider_->value();
   s.lowerRes = static_cast<float>(lowerResSpin_->value());
-  s.backgroundsDir = backgroundsDirEdit_->text().toStdString();
+  s.backgroundsDir = includedBackgroundsRadio_->isChecked()
+                         ? AppSettings().backgroundsDir
+                         : backgroundsDirEdit_->text().toStdString();
   s.secondsPerBackground =
       autoCycleCheck_->isChecked() ? std::max(1, secondsPerBackgroundSpin_->value()) : -1;
   s.debugGrid = debugGridCheck_->isChecked();
@@ -734,6 +1083,18 @@ void SettingsDialog::updateSwatchDisplay(bool hasTarget) {
     swatchLabel_->setText("No colour selected — click swatch to pick manually,\n"
                           "or use Shift+S / Select Color from Frame to pick from camera");
   }
+}
+
+void SettingsDialog::updateBackgroundStatus() {
+  const std::string dir = includedBackgroundsRadio_->isChecked()
+                              ? AppSettings().backgroundsDir
+                              : backgroundsDirEdit_->text().toStdString();
+  const size_t count = Backgrounds::discoverableImageCount(dir);
+  backgroundStatus_->setText(
+      count > 0 ? QString("%1 supported image%2 found")
+                      .arg(count)
+                      .arg(count == 1 ? "" : "s")
+                : "No supported images found in this location");
 }
 
 void SettingsDialog::openColorPicker() {
@@ -768,3 +1129,33 @@ void SettingsDialog::browseModelPath() {
     modelPathEdit_->setCursorPosition(modelPathEdit_->text().size());
   }
 }
+
+#ifdef __APPLE__
+void SettingsDialog::refreshCameras() {
+  const QString selected = cameraCombo_->currentText();
+  const int selectedIndex = cameraCombo_->currentData().toInt();
+  const auto names = AvFoundationCamera::availableDeviceNames();
+  if (static_cast<size_t>(cameraCombo_->count()) == names.size()) {
+    bool unchanged = true;
+    for (int i = 0; i < cameraCombo_->count(); ++i)
+      unchanged &= cameraCombo_->itemText(i) == QString::fromStdString(names[i]);
+    if (unchanged)
+      return;
+  }
+
+  QSignalBlocker blocker(cameraCombo_);
+  cameraCombo_->clear();
+  for (size_t i = 0; i < names.size(); ++i)
+    cameraCombo_->addItem(QString::fromStdString(names[i]), static_cast<int>(i));
+  if (cameraCombo_->count() == 0) {
+    cameraCombo_->addItem("No cameras found", 0);
+    cameraCombo_->setEnabled(false);
+    return;
+  }
+  cameraCombo_->setEnabled(true);
+  int replacement = cameraCombo_->findText(selected);
+  if (replacement < 0)
+    replacement = cameraCombo_->findData(selectedIndex);
+  cameraCombo_->setCurrentIndex(replacement >= 0 ? replacement : 0);
+}
+#endif

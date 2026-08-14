@@ -250,6 +250,13 @@ void CameraFeed::setROI(cv::Rect rect, cv::Mat mask) {
             << roiRect_.width << "x" << roiRect_.height << "\n";
 }
 
+void CameraFeed::clearROI() {
+  std::lock_guard<std::mutex> lock(roiMutex_);
+  roiRect_ = cv::Rect();
+  roiMask_.release();
+  doingROI_.store(false);
+}
+
 /**
  * @brief Initialize the camera feed.
  *

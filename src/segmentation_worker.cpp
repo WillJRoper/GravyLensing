@@ -22,6 +22,7 @@
  */
 
 // Standard includes
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 
@@ -276,7 +277,8 @@ static void computePixelMedian(const std::vector<cv::Mat> &history,
 SegmentationWorker::SegmentationWorker(const std::string &modelPath,
                                        int modelSize, int nthreads,
                                        float temporalSmooth, float lowerRes,
-                                       const std::string &qualityMode)
+                                       const std::string &qualityMode,
+                                       int personSensitivity)
     : modelPath_(modelPath),
 #ifndef __APPLE__
       device_(pickDevice()),
@@ -284,6 +286,11 @@ SegmentationWorker::SegmentationWorker(const std::string &modelPath,
       qualityMode_(qualityMode), fastW_(modelSize), fastH_(modelSize),
       nthreads_(nthreads), lowerRes_(lowerRes),
       temporalSmooth_(temporalSmooth) {
+
+  const float sensitivity =
+      static_cast<float>(std::clamp(personSensitivity, 0, 100)) / 100.0f;
+  personOnThreshold_ = 0.65f - 0.30f * sensitivity;
+  personOffThreshold_ = personOnThreshold_ - 0.15f;
 
   std::cout << "[SegmentationWorker] Initializing segmentation backend...\n";
 #ifndef __APPLE__

@@ -60,6 +60,27 @@ Backgrounds *initBackgrounds(const std::string &dir) {
  */
 Backgrounds::Backgrounds(const std::string &dir) : dir_(dir) {}
 
+size_t Backgrounds::discoverableImageCount(const std::string &dir) {
+  size_t count = 0;
+  try {
+    if (!fs::exists(dir) || !fs::is_directory(dir))
+      return 0;
+    for (const auto &entry : fs::directory_iterator(dir)) {
+      if (!entry.is_regular_file())
+        continue;
+      auto ext = entry.path().extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      if (std::find(kImageExts.begin(), kImageExts.end(), ext) !=
+          kImageExts.end())
+        ++count;
+    }
+  } catch (const fs::filesystem_error &) {
+    return 0;
+  }
+  return count;
+}
+
 /**
  * @brief Scan & load *all* images with “known” extensions.
  *

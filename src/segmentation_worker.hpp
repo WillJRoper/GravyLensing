@@ -65,7 +65,8 @@ public:
   SegmentationWorker(const std::string &modelPath, int modelSize = 512,
                      int nthreads = 1, float temporalSmooth = 0.6f,
                      float lowerRes = 1.0f,
-                     const std::string &qualityMode = "balanced");
+                     const std::string &qualityMode = "balanced",
+                     int personSensitivity = 50);
   ~SegmentationWorker();
 
   // Check loaded model
@@ -177,8 +178,8 @@ private:
   const int minBlobArea = 50;
 
   // Thresholds for converting the refined soft mask to a binary mask.
-  const float personOnThreshold_ = 0.50f;
-  const float personOffThreshold_ = 0.35f;
+  float personOnThreshold_ = 0.50f;
+  float personOffThreshold_ = 0.35f;
 
   // Temporal median filter on the probability map.
   // Maintains a circular buffer of recent probability maps and uses the

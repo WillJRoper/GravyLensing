@@ -78,6 +78,7 @@ public:
 
   /// Apply a new ROI rectangle and mask at runtime.
   Q_INVOKABLE void setROI(cv::Rect rect, cv::Mat mask);
+  Q_INVOKABLE void clearROI();
 
   Q_INVOKABLE void setPreviewEnabled(bool enabled) { previewEnabled_ = enabled; }
 

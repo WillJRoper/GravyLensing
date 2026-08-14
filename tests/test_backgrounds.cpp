@@ -23,7 +23,8 @@ int main() {
   cv::imwrite((second / "custom.png").string(), green);
 
   Backgrounds backgrounds(first.string());
-  const bool loadedAll = backgrounds.load() && backgrounds.size() == 11;
+  const bool loadedAll = Backgrounds::discoverableImageCount(first.string()) == 11 &&
+                         backgrounds.load() && backgrounds.size() == 11;
   const bool navigated = backgrounds.next() && backgrounds.previous();
   const bool switched = backgrounds.setDirectory(second.string()) &&
                         backgrounds.size() == 1 &&

@@ -192,6 +192,17 @@ void ViewPort::setupMenuBar() {
         emit selectROIRequested();
         return;
       }
+      if (dlg.roiClearRequested()) {
+        hasROI_ = false;
+        roiX_ = roiY_ = roiW_ = roiH_ = 0;
+        emit clearROIRequested();
+      }
+      if (dlg.colorFramePickRequested()) {
+        settings_ = dlg.settings();
+        emit settingsChanged(settings_);
+        emit selectColorRequested();
+        return;
+      }
       if (dlg.colorPickRequested()) {
         targetHue_ = dlg.pickedHue();
         targetSat_ = dlg.pickedSat();

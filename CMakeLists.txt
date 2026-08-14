@@ -142,6 +142,7 @@ set(SOURCES
   src/viewport.cpp
   src/cam_feed.cpp
   src/backgrounds.cpp
+  src/session_setup_dialog.cpp
   src/settings_dialog.cpp
 )
 
@@ -272,4 +273,8 @@ if(BUILD_TESTS)
     ${OpenCV_LIBS}
   )
   add_test(NAME backgrounds COMMAND test_backgrounds)
+
+  add_executable(test_settings tests/test_settings.cpp)
+  target_link_libraries(test_settings PRIVATE Qt6::Core)
+  add_test(NAME settings COMMAND test_settings)
 endif()

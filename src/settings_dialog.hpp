@@ -38,6 +38,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRadioButton>
+#include <QSlider>
 #include <QSpinBox>
 
 #include "settings.hpp"
@@ -72,12 +74,14 @@ public:
 
   /// True if the user clicked the colour swatch to request a re-pick.
   bool colorPickRequested() const { return colorPickRequested_; }
+  bool colorFramePickRequested() const { return colorFramePickRequested_; }
   float pickedHue() const { return pickedHue_; }
   float pickedSat() const { return pickedSat_; }
   float pickedVal() const { return pickedVal_; }
 
   /// True if the user clicked the "Select Region..." button.
   bool roiSelectRequested() const { return roiSelectRequested_; }
+  bool roiClearRequested() const { return roiClearRequested_; }
 
 private Q_SLOTS:
   void browseModelPath();
@@ -85,37 +89,53 @@ private Q_SLOTS:
 
 private:
   void updateSwatchDisplay(bool hasTarget);
+  void updateBackgroundStatus();
+#ifdef __APPLE__
+  void refreshCameras();
+#endif
 
 private:
   QLineEdit *modelPathEdit_;
   QPushButton *browseBtn_;
 
   QSpinBox *nthreadsSpin_;
+  QCheckBox *automaticThreadsCheck_;
   QDoubleSpinBox *strengthSpin_;
   QDoubleSpinBox *softeningSpin_;
   QSpinBox *modelSizeSpin_;
+#ifdef __APPLE__
+  QComboBox *cameraCombo_;
+#else
   QSpinBox *deviceIndexSpin_;
+#endif
   QComboBox *fpsCombo_;
   QComboBox *qualityModeCombo_;
   QCheckBox *debugGridCheck_;
   QSpinBox *padFactorSpin_;
   QDoubleSpinBox *temporalSmoothSpin_;
+  QSlider *personSensitivitySlider_;
   QDoubleSpinBox *lowerResSpin_;
   QCheckBox *distortInsideCheck_;
   QCheckBox *flipCheck_;
   QCheckBox *selectROICheck_;
-  QComboBox *maskModeCombo_;
-  QComboBox *colorModeTypeCombo_;
+  QRadioButton *personDetectionRadio_;
+  QRadioButton *colorDetectionRadio_;
+  QRadioButton *fixedColorRadio_;
+  QRadioButton *trackedColorRadio_;
   QSpinBox *colorHueTolSpin_;
   QSpinBox *colorSatTolSpin_;
   QSpinBox *colorValTolSpin_;
 
   QLineEdit *backgroundsDirEdit_;
+  QRadioButton *includedBackgroundsRadio_;
+  QRadioButton *customBackgroundsRadio_;
+  QLabel *backgroundStatus_;
   QPushButton *browseBgBtn_;
   QCheckBox *autoCycleCheck_;
   QSpinBox *secondsPerBackgroundSpin_;
 
   bool colorPickRequested_ = false;
+  bool colorFramePickRequested_ = false;
   float pickedHue_ = 0;
   float pickedSat_ = 0;
   float pickedVal_ = 0;
@@ -124,6 +144,7 @@ private:
   QLabel *swatchLabel_ = nullptr;
 
   bool roiSelectRequested_ = false;
+  bool roiClearRequested_ = false;
   bool hasROI_ = false;
   int roiX_ = 0, roiY_ = 0, roiW_ = 0, roiH_ = 0;
   QLabel *roiInfoLabel_ = nullptr;

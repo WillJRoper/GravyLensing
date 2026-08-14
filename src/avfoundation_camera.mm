@@ -17,6 +17,15 @@ struct FormatChoice {
   int pixelCount = std::numeric_limits<int>::max();
 };
 
+static NSArray<AVCaptureDevice *> *discoverVideoDevices() {
+  return [AVCaptureDeviceDiscoverySession
+             discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
+                                                AVCaptureDeviceTypeExternal ]
+                                  mediaType:AVMediaTypeVideo
+                                   position:AVCaptureDevicePositionUnspecified]
+      .devices;
+}
+
 static cv::Mat convertPixelBufferToBgr(CVPixelBufferRef imageBuffer) {
   if (imageBuffer == nullptr) {
     return cv::Mat();
@@ -124,17 +133,21 @@ AvFoundationCamera::AvFoundationCamera(int deviceIndex)
 
 AvFoundationCamera::~AvFoundationCamera() { close(); }
 
+std::vector<std::string> AvFoundationCamera::availableDeviceNames() {
+  std::vector<std::string> names;
+  @autoreleasepool {
+    for (AVCaptureDevice *device in discoverVideoDevices()) {
+      names.emplace_back(device.localizedName.UTF8String);
+    }
+  }
+  return names;
+}
+
 bool AvFoundationCamera::open(std::string &error, int desiredFps) {
   close();
 
   @autoreleasepool {
-    NSArray<AVCaptureDevice *> *devices =
-        [AVCaptureDeviceDiscoverySession
-            discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
-                                               AVCaptureDeviceTypeExternal ]
-                                 mediaType:AVMediaTypeVideo
-                                  position:AVCaptureDevicePositionUnspecified]
-            .devices;
+    NSArray<AVCaptureDevice *> *devices = discoverVideoDevices();
 
     if (impl_->deviceIndex_ < 0 || impl_->deviceIndex_ >= static_cast<int>(devices.count)) {
       error = "Camera device index out of range";

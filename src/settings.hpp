@@ -27,15 +27,22 @@
 
 #pragma once
 
+#include <algorithm>
 #include <string>
 
 #include <QCoreApplication>
 #include <QSettings>
+#include <QThread>
 
 struct AppSettings {
 
+  static int recommendedThreads() {
+    return std::max(4, QThread::idealThreadCount());
+  }
+
   // ── Performance ────────────────────────────────────────────────────
-  int nthreads = 12;            // Total CPU threads (Qt reserves 3)
+  int nthreads = recommendedThreads(); // Total CPU threads (Qt reserves 3)
+  bool automaticThreads = true;
 
   // ── Lensing ────────────────────────────────────────────────────────
   float strength = 4.0f;        // Deflection multiplier
@@ -63,6 +70,7 @@ struct AppSettings {
   std::string modelPath = "models/lraspp_torchscript-traced_float32_512_512.pt";
   int modelSize = 512;          // Segmentation model input size (px)
   float temporalSmooth = 0.25f; // Frame blending factor (0–1)
+  int personSensitivity = 50;   // Detection sensitivity (0 strict, 100 sensitive)
   std::string qualityMode = "balanced"; // fast, balanced, high, custom
 
   // ── Runtime ────────────────────────────────────────────────────────
@@ -78,11 +86,14 @@ struct AppSettings {
 
   /// True when every field matches.
   bool equals(const AppSettings &other) const {
-    return nthreads == other.nthreads && strength == other.strength &&
+    return nthreads == other.nthreads &&
+           automaticThreads == other.automaticThreads &&
+           strength == other.strength &&
            softening == other.softening && deviceIndex == other.deviceIndex &&
            fps == other.fps && debugGrid == other.debugGrid && padFactor == other.padFactor &&
            modelSize == other.modelSize &&
            temporalSmooth == other.temporalSmooth &&
+           personSensitivity == other.personSensitivity &&
            qualityMode == other.qualityMode &&
            lowerRes == other.lowerRes &&
            secondsPerBackground == other.secondsPerBackground &&
@@ -99,6 +110,10 @@ struct AppSettings {
   /// Load from persistent storage, keeping current values as fallbacks.
   void load(QSettings &s) {
     nthreads = s.value("nthreads", nthreads).toInt();
+    automaticThreads =
+        s.value("automaticThreads", automaticThreads).toBool();
+    if (automaticThreads)
+      nthreads = recommendedThreads();
     strength = s.value("strength", strength).toFloat();
     softening = s.value("softening", softening).toFloat();
     deviceIndex = s.value("deviceIndex", deviceIndex).toInt();
@@ -107,6 +122,8 @@ struct AppSettings {
     padFactor = s.value("padFactor", padFactor).toInt();
     modelSize = s.value("modelSize", modelSize).toInt();
     temporalSmooth = s.value("temporalSmooth", temporalSmooth).toFloat();
+    personSensitivity =
+        s.value("personSensitivity", personSensitivity).toInt();
     qualityMode =
         s.value("qualityMode", QString::fromStdString(qualityMode)).toString().toStdString();
     lowerRes = s.value("lowerRes", lowerRes).toFloat();
@@ -134,6 +151,7 @@ struct AppSettings {
   /// Write all fields to persistent storage.
   void save(QSettings &s) const {
     s.setValue("nthreads", nthreads);
+    s.setValue("automaticThreads", automaticThreads);
     s.setValue("strength", strength);
     s.setValue("softening", softening);
     s.setValue("deviceIndex", deviceIndex);
@@ -142,6 +160,7 @@ struct AppSettings {
     s.setValue("padFactor", padFactor);
     s.setValue("modelSize", modelSize);
     s.setValue("temporalSmooth", temporalSmooth);
+    s.setValue("personSensitivity", personSensitivity);
     s.setValue("qualityMode", QString::fromStdString(qualityMode));
     s.setValue("lowerRes", lowerRes);
     s.setValue("secondsPerBackground", secondsPerBackground);

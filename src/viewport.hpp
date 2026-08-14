@@ -88,6 +88,7 @@ public Q_SLOTS:
 
 signals:
   void selectROIRequested();
+  void clearROIRequested();
   void selectColorRequested();
   void toggleMaskModeRequested();
   void debugGridToggled(bool enabled);
