@@ -821,6 +821,14 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   addFormRow(lensForm, "Lens appearance", distortInsideCheck_->toolTip(),
               distortInsideCheck_);
 
+  showLensContentsCheck_ = makeCheck(
+      "Show the live camera inside the lens",
+      "Composite camera pixels inside the detected mask over the lensed "
+      "background. This can also be toggled from the View menu.");
+  showLensContentsCheck_->setChecked(settings.showLensContents);
+  addFormRow(lensForm, "Lens contents", showLensContentsCheck_->toolTip(),
+             showLensContentsCheck_);
+
   effectPage->addWidget(lensGroup);
   effectPage->addStretch(1);
 
@@ -1206,6 +1214,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             lensEdgeSoftnessSpin_->setValue(defaults.lensEdgeSoftness);
             padFactorSpin_->setValue(defaults.padFactor);
             distortInsideCheck_->setChecked(!defaults.distortInside);
+            showLensContentsCheck_->setChecked(defaults.showLensContents);
             nthreadsSpin_->setValue(defaults.nthreads);
             backgroundsDirEdit_->setText(
                 QString::fromStdString(defaults.backgroundsDir));
@@ -1265,6 +1274,7 @@ AppSettings SettingsDialog::settings() const {
       static_cast<float>(lensEdgeSoftnessSpin_->value());
   s.padFactor = padFactorSpin_->value();
   s.distortInside = !distortInsideCheck_->isChecked();
+  s.showLensContents = showLensContentsCheck_->isChecked();
   s.temporalSmooth = static_cast<float>(temporalSmoothSpin_->value());
   s.lowerRes = static_cast<float>(lowerResSpin_->value());
   s.personSensitivity = personSensitivitySlider_->value();

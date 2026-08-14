@@ -690,7 +690,7 @@ int main(int argc, char **argv) {
       }
       const bool useNativeOnlyPersonPath =
           activeMaskMode == ActiveMaskMode::Person && segWorker != nullptr &&
-          !activeSettings.debugGrid;
+          !activeSettings.debugGrid && !activeSettings.showLensContents;
       QMetaObject::invokeMethod(
           camFeed,
           [camFeed, enablePreview = !useNativeOnlyPersonPath]() {
@@ -702,10 +702,10 @@ int main(int argc, char **argv) {
     };
 
     setActiveMaskMode = [&](ActiveMaskMode mode) {
-      activeMaskMode = mode;
       if (mode == ActiveMaskMode::Person && !ensurePersonWorkerLoaded()) {
         return;
       }
+      activeMaskMode = mode;
 
       const bool enablePerson = mode == ActiveMaskMode::Person;
       const bool enableColor = mode == ActiveMaskMode::Color;
@@ -821,6 +821,18 @@ int main(int argc, char **argv) {
                       QSettings s;
                      activeSettings.save(s);
                      saveSessionSelections(s);
+                    });
+
+  QObject::connect(vp, &ViewPort::showLensContentsToggled, vp,
+                   [vp, &activeSettings, &saveSessionSelections,
+                    &updatePreviewPolicy](bool enabled) {
+                     activeSettings.showLensContents = enabled;
+                     vp->setSettings(activeSettings);
+                     if (updatePreviewPolicy)
+                       updatePreviewPolicy();
+                     QSettings s;
+                     activeSettings.save(s);
+                     saveSessionSelections(s);
                    });
 
   QObject::connect(vp, &ViewPort::selectROIRequested, vp, [&]() {
@@ -871,32 +883,67 @@ int main(int argc, char **argv) {
                               Qt::QueuedConnection);
   });
 
-  QObject::connect(vp, &ViewPort::toggleMaskModeRequested, vp, [&]() {
-    if (!segWorker || !colorWorker || !setActiveMaskMode)
+  const auto requestMaskMode = [&](ActiveMaskMode requestedMode) {
+    if (!colorWorker || !setActiveMaskMode || activeMaskMode == requestedMode)
       return;
 
-    if (activeMaskMode == ActiveMaskMode::Color) {
-      if (!personModeAvailable) {
-        reportError("Person mode is unavailable because the segmentation "
-                    "model failed to load");
-        return;
-      }
-      setActiveMaskMode(ActiveMaskMode::Person);
-      activeSettings.maskMode = "person";
-      vp->setSettings(activeSettings);
-      QSettings s;
-      activeSettings.save(s);
-      saveSessionSelections(s);
+    setActiveMaskMode(requestedMode);
+    if (activeMaskMode != requestedMode)
       return;
-    }
-
-    setActiveMaskMode(ActiveMaskMode::Color);
-    activeSettings.maskMode = "color";
+    activeSettings.maskMode = requestedMode == ActiveMaskMode::Color
+                                  ? "color"
+                                  : "person";
     vp->setSettings(activeSettings);
     QSettings s;
     activeSettings.save(s);
     saveSessionSelections(s);
+  };
+
+  QObject::connect(vp, &ViewPort::toggleMaskModeRequested, vp, [&]() {
+    requestMaskMode(activeMaskMode == ActiveMaskMode::Color
+                        ? ActiveMaskMode::Person
+                        : ActiveMaskMode::Color);
   });
+  QObject::connect(vp, &ViewPort::maskModeRequested, vp,
+                   [&](bool colorMode) {
+                     requestMaskMode(colorMode ? ActiveMaskMode::Color
+                                               : ActiveMaskMode::Person);
+                   });
+
+  int lastBackgroundInterval =
+      activeSettings.secondsPerBackground > 0
+          ? activeSettings.secondsPerBackground
+          : 10;
+  const auto setBackgroundCycleInterval = [&](int seconds) {
+    if (bgTimer != nullptr) {
+      bgTimer->stop();
+      delete bgTimer;
+      bgTimer = nullptr;
+    }
+    activeSettings.secondsPerBackground = seconds;
+    if (seconds > 0) {
+      lastBackgroundInterval = seconds;
+      bgTimer = new QTimer(vp);
+      QObject::connect(bgTimer, &QTimer::timeout, backgrounds,
+                       &Backgrounds::next);
+      bgTimer->start(seconds * 1000);
+    }
+    vp->setSettings(activeSettings);
+    QSettings s;
+    activeSettings.save(s);
+    saveSessionSelections(s);
+  };
+
+  QObject::connect(vp, &ViewPort::backgroundAutoCycleToggled, vp,
+                   [&](bool enabled) {
+                     setBackgroundCycleInterval(enabled
+                                                    ? lastBackgroundInterval
+                                                    : -1);
+                   });
+  QObject::connect(vp, &ViewPort::backgroundIntervalRequested, vp,
+                   [&](int seconds) {
+                     setBackgroundCycleInterval(seconds);
+                   });
 
   // ── Session restart handler ────────────────────────────────────────
   // Triggered by the Session Settings dialog.  Preserves the current

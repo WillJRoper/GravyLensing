@@ -5,6 +5,7 @@
 #include <opencv2/opencv.hpp>
 
 #include "backgrounds.hpp"
+#include "image_compositing.hpp"
 #include "processing_geometry.hpp"
 
 int main() {
@@ -61,11 +62,18 @@ int main() {
   const bool failedSwitchRetained =
       !resized.next() && !resized.current().empty() &&
       cv::norm(resized.current(), retainedImage, cv::NORM_INF) == 0.0;
+  const cv::Mat composited = compositeMaskedForeground(
+      cv::Mat(2, 2, CV_8UC3, cv::Scalar(10, 20, 30)),
+      cv::Mat(2, 2, CV_8UC3, cv::Scalar(100, 110, 120)),
+      (cv::Mat_<uchar>(2, 2) << 255, 0, 0, 0));
+  const bool compositing =
+      composited.at<cv::Vec3b>(0, 0) == cv::Vec3b(100, 110, 120) &&
+      composited.at<cv::Vec3b>(0, 1) == cv::Vec3b(10, 20, 30);
 
   fs::remove_all(root);
   return loadedAll && navigated && switched && retained && capped &&
                  letterboxed && stretchedToSize && cacheReusable && geometry &&
-                 failedSwitchRetained
+                 failedSwitchRetained && compositing
              ? 0
              : 1;
 }

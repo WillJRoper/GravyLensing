@@ -24,6 +24,7 @@ int main(int argc, char **argv) {
   saved.colorPersistenceFrames = 12;
   saved.colorMaskSmooth = 0.3f;
   saved.lowerRes = 0.75f;
+  saved.showLensContents = true;
   saved.save(stored);
 
   AppSettings loaded;
@@ -34,7 +35,7 @@ int main(int argc, char **argv) {
       loaded.cameraHeight != 1080 || loaded.lensEdgeSoftness != 2.3f ||
       loaded.colorMinObjectArea != 900 ||
       loaded.colorPersistenceFrames != 12 || loaded.colorMaskSmooth != 0.3f ||
-      loaded.lowerRes != 0.75f)
+      loaded.lowerRes != 0.75f || !loaded.showLensContents)
     return 1;
 
   stored.setValue("automaticThreads", true);

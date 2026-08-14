@@ -78,6 +78,7 @@ struct AppSettings {
 
   // ── Runtime ────────────────────────────────────────────────────────
   bool debugGrid = false;       // Show 2x2 diagnostic view
+  bool showLensContents = false; // Composite camera pixels inside the mask
   int backgroundWidth = 1920;
   int backgroundHeight = 1080;
   std::string backgroundFitMode = "crop"; // crop, fit, stretch
@@ -98,7 +99,9 @@ struct AppSettings {
            softening == other.softening && deviceIndex == other.deviceIndex &&
            fps == other.fps && cameraWidth == other.cameraWidth &&
            cameraHeight == other.cameraHeight &&
-           debugGrid == other.debugGrid && padFactor == other.padFactor &&
+           debugGrid == other.debugGrid &&
+           showLensContents == other.showLensContents &&
+           padFactor == other.padFactor &&
            lowerRes == other.lowerRes &&
            visionSize == other.visionSize &&
            temporalSmooth == other.temporalSmooth &&
@@ -137,6 +140,8 @@ struct AppSettings {
     cameraWidth = s.value("cameraWidth", cameraWidth).toInt();
     cameraHeight = s.value("cameraHeight", cameraHeight).toInt();
     debugGrid = s.value("debugGrid", debugGrid).toBool();
+    showLensContents =
+        s.value("showLensContents", showLensContents).toBool();
     padFactor = s.value("padFactor", padFactor).toInt();
     lowerRes = s.value("lowerRes", lowerRes).toFloat();
     visionSize = s.value("visionSize", visionSize).toInt();
@@ -186,6 +191,7 @@ struct AppSettings {
     s.setValue("cameraWidth", cameraWidth);
     s.setValue("cameraHeight", cameraHeight);
     s.setValue("debugGrid", debugGrid);
+    s.setValue("showLensContents", showLensContents);
     s.setValue("padFactor", padFactor);
     s.setValue("lowerRes", lowerRes);
     s.setValue("visionSize", visionSize);

@@ -105,6 +105,7 @@ private:
   QDoubleSpinBox *temporalSmoothSpin_;
   QSlider *personSensitivitySlider_;
   QCheckBox *distortInsideCheck_;
+  QCheckBox *showLensContentsCheck_;
   QCheckBox *flipCheck_;
   QCheckBox *selectROICheck_;
   QRadioButton *personDetectionRadio_;

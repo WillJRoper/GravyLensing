@@ -28,12 +28,15 @@
 #include <QGridLayout>
 #include <QKeyEvent>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPixmap>
 #include <QScreen>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QVBoxLayout>
 
 #include "perf_log.hpp"
+#include "image_compositing.hpp"
 #include "settings_dialog.hpp"
 
 static QImage MatToQImage(const cv::Mat &mat) {
@@ -121,29 +124,124 @@ void ViewPort::setupMenuBar() {
 
   // ── File ──────────────────────────────────────────────────────────
   QMenu *fileMenu = mb->addMenu("&File");
-
-  QAction *selectROIAction = fileMenu->addAction("Select &Region...");
-  selectROIAction->setShortcut(QKeySequence("Shift+R"));
-  selectROIAction->setToolTip("Draw a region of interest on the camera feed.");
-  connect(selectROIAction, &QAction::triggered, this,
-          &ViewPort::selectROIRequested);
-
-  selectColorAction_ = fileMenu->addAction("Select &Color...");
-  selectColorAction_->setShortcut(QKeySequence("Shift+S"));
-  selectColorAction_->setToolTip("Pick an HSV colour to track.");
-  connect(selectColorAction_, &QAction::triggered, this,
-          &ViewPort::selectColorRequested);
-
-  fileMenu->addSeparator();
-
   QAction *quitAction = fileMenu->addAction("&Quit");
   quitAction->setShortcut(QKeySequence::Quit);
   quitAction->setMenuRole(QAction::QuitRole);
   connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
 
+  // ── Session ───────────────────────────────────────────────────────
+  QMenu *sessionMenu = mb->addMenu("&Session");
+  QAction *settingsAction = sessionMenu->addAction("&Settings...");
+  settingsAction->setShortcut(QKeySequence::Preferences);
+  settingsAction->setMenuRole(QAction::NoRole);
+  settingsAction->setToolTip("Change session, camera, lens, and performance settings.");
+  connect(settingsAction, &QAction::triggered, this, [this]() {
+    SettingsDialog dlg(settings_, "Settings", "Restart Session", targetHue_,
+                       targetSat_, targetVal_, hasTarget_, hasROI_, roiX_, roiY_,
+                       roiW_, roiH_, this);
+    if (dlg.exec() != QDialog::Accepted)
+      return;
+    if (dlg.roiSelectRequested()) {
+      emit selectROIRequested();
+      return;
+    }
+    if (dlg.roiClearRequested()) {
+      setROIState(false, 0, 0, 0, 0);
+      emit clearROIRequested();
+    }
+    if (dlg.colorFramePickRequested()) {
+      settings_ = dlg.settings();
+      emit settingsChanged(settings_);
+      emit selectColorRequested();
+      return;
+    }
+    if (dlg.colorPickRequested()) {
+      targetHue_ = dlg.pickedHue();
+      targetSat_ = dlg.pickedSat();
+      targetVal_ = dlg.pickedVal();
+      hasTarget_ = true;
+    }
+    settings_ = dlg.settings();
+    emit settingsChanged(settings_);
+  });
+
+  // ── Lens ──────────────────────────────────────────────────────────
+  QMenu *lensMenu = mb->addMenu("&Lens");
+  auto *lensModeGroup = new QActionGroup(this);
+  lensModeGroup->setExclusive(true);
+  personLensAction_ = lensMenu->addAction("&People");
+  personLensAction_->setCheckable(true);
+  personLensAction_->setChecked(settings_.maskMode != "color");
+  lensModeGroup->addAction(personLensAction_);
+  colorLensAction_ = lensMenu->addAction("Selected &Colour");
+  colorLensAction_->setCheckable(true);
+  colorLensAction_->setChecked(settings_.maskMode == "color");
+  lensModeGroup->addAction(colorLensAction_);
+  connect(personLensAction_, &QAction::triggered, this,
+          [this]() { emit maskModeRequested(false); });
+  connect(colorLensAction_, &QAction::triggered, this,
+          [this]() { emit maskModeRequested(true); });
+
+  toggleMaskAction_ = lensMenu->addAction("&Switch Lens Mode");
+  toggleMaskAction_->setShortcut(QKeySequence("Shift+M"));
+  connect(toggleMaskAction_, &QAction::triggered, this,
+          &ViewPort::toggleMaskModeRequested);
+  lensMenu->addSeparator();
+
+  selectColorAction_ = lensMenu->addAction("Select &Colour...");
+  selectColorAction_->setShortcut(QKeySequence("Shift+S"));
+  connect(selectColorAction_, &QAction::triggered, this,
+          &ViewPort::selectColorRequested);
+
+  QAction *selectROIAction = lensMenu->addAction("Select &Region...");
+  selectROIAction->setShortcut(QKeySequence("Shift+R"));
+  connect(selectROIAction, &QAction::triggered, this,
+          &ViewPort::selectROIRequested);
+  clearROIAction_ = lensMenu->addAction("Use &Full Frame");
+  clearROIAction_->setEnabled(hasROI_);
+  connect(clearROIAction_, &QAction::triggered, this, [this]() {
+    setROIState(false, 0, 0, 0, 0);
+    emit clearROIRequested();
+  });
+
+  // ── Background ────────────────────────────────────────────────────
+  QMenu *backgroundMenu = mb->addMenu("&Background");
+  QAction *previousBackground = backgroundMenu->addAction("&Previous");
+  previousBackground->setShortcut(Qt::Key_Left);
+  connect(previousBackground, &QAction::triggered, this, [this]() {
+    if (backgrounds_)
+      backgrounds_->previous();
+  });
+  QAction *nextBackground = backgroundMenu->addAction("&Next");
+  nextBackground->setShortcut(Qt::Key_Right);
+  connect(nextBackground, &QAction::triggered, this, [this]() {
+    if (backgrounds_)
+      backgrounds_->next();
+  });
+  backgroundMenu->addSeparator();
+
+  autoCycleAction_ = backgroundMenu->addAction("&Automatic Cycling");
+  autoCycleAction_->setCheckable(true);
+  autoCycleAction_->setChecked(settings_.secondsPerBackground > 0);
+  connect(autoCycleAction_, &QAction::toggled, this,
+          &ViewPort::backgroundAutoCycleToggled);
+
+  QMenu *intervalMenu = backgroundMenu->addMenu("Cycle &Every");
+  cycleIntervalGroup_ = new QActionGroup(this);
+  cycleIntervalGroup_->setExclusive(true);
+  for (const int seconds : {5, 10, 15, 30, 60}) {
+    QAction *interval = intervalMenu->addAction(
+        seconds == 60 ? "1 minute" : QString("%1 seconds").arg(seconds));
+    interval->setCheckable(true);
+    interval->setData(seconds);
+    interval->setChecked(settings_.secondsPerBackground == seconds);
+    cycleIntervalGroup_->addAction(interval);
+    connect(interval, &QAction::triggered, this,
+            [this, seconds]() { emit backgroundIntervalRequested(seconds); });
+  }
+
   // ── View ──────────────────────────────────────────────────────────
   QMenu *viewMenu = mb->addMenu("&View");
-
   debugGridAction_ = viewMenu->addAction("Debug &Grid");
   debugGridAction_->setCheckable(true);
   debugGridAction_->setShortcut(QKeySequence("Shift+D"));
@@ -151,67 +249,40 @@ void ViewPort::setupMenuBar() {
   connect(debugGridAction_, &QAction::toggled, this,
           &ViewPort::debugGridToggled);
 
-  toggleMaskAction_ = viewMenu->addAction("Mask Mode: &Person");
-  toggleMaskAction_->setShortcut(QKeySequence("Shift+M"));
-  toggleMaskAction_->setToolTip("Switch AI person segmentation / HSV colour tracking.");
-  connect(toggleMaskAction_, &QAction::triggered, this,
-          &ViewPort::toggleMaskModeRequested);
+  showLensContentsAction_ = viewMenu->addAction("Show Camera Inside &Lens");
+  showLensContentsAction_->setCheckable(true);
+  showLensContentsAction_->setShortcut(QKeySequence("Shift+I"));
+  showLensContentsAction_->setChecked(settings_.showLensContents);
+  showLensContentsAction_->setToolTip(
+      "Show the live camera inside the detected lens mask over the lensed "
+      "background.");
+  connect(showLensContentsAction_, &QAction::toggled, this,
+          &ViewPort::showLensContentsToggled);
 
-  viewMenu->addSeparator();
-
-  QMenu *bgMenu = viewMenu->addMenu("&Background");
-  bgMenu->setToolTip("Quickly switch between loaded background images.");
-
-  QAction *previousBackground = bgMenu->addAction("&Previous Background");
-  previousBackground->setShortcut(Qt::Key_Left);
-  connect(previousBackground, &QAction::triggered, this, [this]() {
-    if (backgrounds_)
-      backgrounds_->previous();
+  QAction *fullScreenAction = viewMenu->addAction("Toggle &Full Screen");
+  fullScreenAction->setShortcut(QKeySequence("Ctrl+Meta+F"));
+  connect(fullScreenAction, &QAction::triggered, this, [this]() {
+    isFullScreen() ? showNormal() : showFullScreen();
   });
 
-  QAction *nextBackground = bgMenu->addAction("&Next Background");
-  nextBackground->setShortcut(Qt::Key_Right);
-  connect(nextBackground, &QAction::triggered, this, [this]() {
-    if (backgrounds_)
-      backgrounds_->next();
+  // ── Help ──────────────────────────────────────────────────────────
+  QMenu *helpMenu = mb->addMenu("&Help");
+  QAction *shortcutsAction = helpMenu->addAction("Keyboard &Shortcuts");
+  connect(shortcutsAction, &QAction::triggered, this, [this]() {
+    QMessageBox::information(
+        this, "Keyboard Shortcuts",
+        "Settings: Cmd+,\nSelect colour: Shift+S\nSelect region: Shift+R\n"
+        "Switch lens mode: Shift+M\nShow camera inside lens: Shift+I\n"
+        "Debug grid: Shift+D\n"
+        "Previous / next background: Left / Right\nQuit: Cmd+Q or Esc");
   });
-
-  // ── Session ───────────────────────────────────────────────────────
-  QMenu *settingsMenu = mb->addMenu("&Session");
-
-  QAction *prefsAction = settingsMenu->addAction("Session &Settings...");
-  prefsAction->setShortcut(QKeySequence::Preferences);
-  prefsAction->setMenuRole(QAction::PreferencesRole);
-  connect(prefsAction, &QAction::triggered, this, [this]() {
-    SettingsDialog dlg(settings_, "Session Settings", "Restart Session",
-                       targetHue_, targetSat_, targetVal_, hasTarget_,
-                       hasROI_, roiX_, roiY_, roiW_, roiH_,
-                       this);
-    if (dlg.exec() == QDialog::Accepted) {
-      if (dlg.roiSelectRequested()) {
-        emit selectROIRequested();
-        return;
-      }
-      if (dlg.roiClearRequested()) {
-        hasROI_ = false;
-        roiX_ = roiY_ = roiW_ = roiH_ = 0;
-        emit clearROIRequested();
-      }
-      if (dlg.colorFramePickRequested()) {
-        settings_ = dlg.settings();
-        emit settingsChanged(settings_);
-        emit selectColorRequested();
-        return;
-      }
-      if (dlg.colorPickRequested()) {
-        targetHue_ = dlg.pickedHue();
-        targetSat_ = dlg.pickedSat();
-        targetVal_ = dlg.pickedVal();
-        hasTarget_ = true;
-      }
-      settings_ = dlg.settings();
-      emit settingsChanged(settings_);
-    }
+  QAction *aboutAction = helpMenu->addAction("&About Gravy Lensing");
+  aboutAction->setMenuRole(QAction::AboutRole);
+  connect(aboutAction, &QAction::triggered, this, [this]() {
+    QMessageBox::about(this, "About Gravy Lensing",
+                       "Gravy Lensing\n\nBe dark matter. Bend spacetime. Warp "
+                       "reality.\n\nReal-time gravitational lensing powered "
+                       "by Apple Vision, Metal, OpenCV, and FFTW.");
   });
 }
 
@@ -228,9 +299,13 @@ void ViewPort::setDebugGridChecked(bool checked) {
 }
 
 void ViewPort::setMaskModeLabel(bool isColorMode) {
+  if (personLensAction_)
+    personLensAction_->setChecked(!isColorMode);
+  if (colorLensAction_)
+    colorLensAction_->setChecked(isColorMode);
   if (toggleMaskAction_)
-    toggleMaskAction_->setText(isColorMode ? "Mask Mode: &Color"
-                                           : "Mask Mode: &Person");
+    toggleMaskAction_->setText(isColorMode ? "Switch to &People"
+                                           : "Switch to &Selected Colour");
 }
 
 void ViewPort::setColorModeActive(bool active) {
@@ -243,6 +318,44 @@ void ViewPort::setColorModeActive(bool active) {
 
 void ViewPort::setBackgroundImages(Backgrounds *backgrounds) {
   backgrounds_ = backgrounds;
+}
+
+void ViewPort::setSettings(const AppSettings &settings) {
+  settings_ = settings;
+  setBackgroundCycleState(settings.secondsPerBackground);
+  setShowLensContentsEnabled(settings.showLensContents);
+}
+
+void ViewPort::setROIState(bool has, int x, int y, int w, int h) {
+  hasROI_ = has;
+  roiX_ = x;
+  roiY_ = y;
+  roiW_ = w;
+  roiH_ = h;
+  if (clearROIAction_)
+    clearROIAction_->setEnabled(has);
+}
+
+void ViewPort::setBackgroundCycleState(int seconds) {
+  if (autoCycleAction_) {
+    QSignalBlocker blocker(autoCycleAction_);
+    autoCycleAction_->setChecked(seconds > 0);
+  }
+  if (!cycleIntervalGroup_)
+    return;
+  for (QAction *action : cycleIntervalGroup_->actions()) {
+    QSignalBlocker blocker(action);
+    action->setChecked(seconds > 0 && action->data().toInt() == seconds);
+  }
+}
+
+void ViewPort::setShowLensContentsEnabled(bool enabled) {
+  showLensContents_ = enabled;
+  if (showLensContentsAction_) {
+    QSignalBlocker blocker(showLensContentsAction_);
+    showLensContentsAction_->setChecked(enabled);
+  }
+  updateLensDisplay();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -267,9 +380,21 @@ void ViewPort::setLens(const cv::Mat &lens) {
   static PerfLog perf("ui-lens", 120);
   const auto t0 = std::chrono::steady_clock::now();
   lens_ = lens;
-  lensLabel_->setPixmap(QPixmap::fromImage(MatToQImage(lens_)));
+  updateLensDisplay();
   const auto t1 = std::chrono::steady_clock::now();
   perf.addSample(std::chrono::duration<double, std::milli>(t1 - t0).count());
+}
+
+void ViewPort::updateLensDisplay() {
+  if (lens_.empty())
+    return;
+  if (!showLensContents_ || image_.empty() || mask_.empty()) {
+    lensLabel_->setPixmap(QPixmap::fromImage(MatToQImage(lens_)));
+    return;
+  }
+
+  const cv::Mat composite = compositeMaskedForeground(lens_, image_, mask_);
+  lensLabel_->setPixmap(QPixmap::fromImage(MatToQImage(composite)));
 }
 
 void ViewPort::setMask(const cv::Mat &mask) {

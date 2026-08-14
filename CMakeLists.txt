@@ -31,6 +31,18 @@ if(APPLE)
     "/opt/homebrew/opt/libomp"
     "/usr/local/opt/libomp"
   )
+  find_library(HOMEBREW_LIBOMP
+    NAMES omp
+    PATHS
+      /opt/homebrew/opt/libomp/lib
+      /usr/local/opt/libomp/lib
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+  # OpenCV reaches this runtime through OpenBLAS. Linking LLVM's separate copy
+  # as well causes OpenMP error #15 and aborts when processing starts.
+  set(OpenMP_omp_LIBRARY "${HOMEBREW_LIBOMP}" CACHE FILEPATH
+      "OpenMP runtime shared with Homebrew dependencies" FORCE)
 endif()
 
 # Find and enable OpenMP
