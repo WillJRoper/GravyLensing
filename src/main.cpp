@@ -198,7 +198,6 @@ int main(int argc, char **argv) {
 
   CommandLineOptions opts = CommandLineOptions::parse(app, appSettings);
   appSettings.nthreads = opts.nthreads;
-  appSettings.automaticThreads = opts.automaticThreads;
   appSettings.strength = opts.strength;
   appSettings.softening = opts.softening;
   appSettings.deviceIndex = opts.deviceIndex;
@@ -207,8 +206,8 @@ int main(int argc, char **argv) {
   appSettings.padFactor = opts.padFactor;
   appSettings.visionSize = opts.visionSize;
   appSettings.temporalSmooth = opts.temporalSmooth;
-  appSettings.personSensitivity = opts.personSensitivity;
   appSettings.lowerRes = opts.lowerRes;
+  appSettings.personSensitivity = opts.personSensitivity;
   appSettings.qualityMode = opts.qualityMode;
   appSettings.secondsPerBackground = opts.secondsPerBackground;
   appSettings.distortInside = opts.distortInside;
@@ -254,7 +253,12 @@ int main(int argc, char **argv) {
   fftwf_init_threads();
 
   Backgrounds *backgrounds =
-      initBackgrounds(appSettings.backgroundsDir);
+      initBackgrounds(appSettings.backgroundsDir,
+                      appSettings.backgroundWidth,
+                      appSettings.backgroundHeight,
+                      appSettings.backgroundFitMode,
+                      appSettings.rebuildBackgroundCache);
+  appSettings.rebuildBackgroundCache = false;
   ViewPort *vp = initViewport(backgrounds, appSettings, appSettings.debugGrid);
 
   AppSettings activeSettings = appSettings;
@@ -272,6 +276,54 @@ int main(int argc, char **argv) {
   ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
   std::function<void(ActiveMaskMode)> setActiveMaskMode;
   std::function<void()> updatePreviewPolicy;
+  int renderedFrames = 0;
+  int performanceWindows = 0;
+  int lowPerformanceWindows = 0;
+  bool performanceWarningShown = false;
+
+  auto *performanceTimer = new QTimer(vp);
+  performanceTimer->setInterval(5000);
+  QObject::connect(performanceTimer, &QTimer::timeout, vp, [&]() {
+    if (lensWorker == nullptr || camFeed == nullptr ||
+        QApplication::applicationState() != Qt::ApplicationActive ||
+        QApplication::activeModalWidget() != nullptr) {
+      renderedFrames = 0;
+      lowPerformanceWindows = 0;
+      return;
+    }
+    const double actualFps = renderedFrames / 5.0;
+    const double expectedFps =
+        std::min(static_cast<double>(activeSettings.fps), camFeed->actualFps());
+    renderedFrames = 0;
+    if (++performanceWindows <= 2 || performanceWarningShown)
+      return;
+
+    if (expectedFps > 0.0 && actualFps < expectedFps * 0.55)
+      ++lowPerformanceWindows;
+    else
+      lowPerformanceWindows = 0;
+
+    if (lowPerformanceWindows < 3)
+      return;
+
+    performanceWarningShown = true;
+    const AppSettings effective = activeSettings.withQualityModeApplied();
+    QMessageBox::warning(
+        vp, "Performance Below Target",
+        QString("The effect is averaging about %1 fps, below the camera's %2 "
+                "fps. Background output is %3 x %4 and internal calculation "
+                "size is about %5 x %6.\n\nTry Fast quality first. You can also "
+                "lower background resolution or camera frame rate.")
+            .arg(actualFps, 0, 'f', 1)
+            .arg(expectedFps, 0, 'f', 1)
+            .arg(activeSettings.backgroundWidth)
+            .arg(activeSettings.backgroundHeight)
+            .arg(static_cast<int>(activeSettings.backgroundWidth *
+                                  effective.lowerRes))
+            .arg(static_cast<int>(activeSettings.backgroundHeight *
+                                  effective.lowerRes)));
+  });
+  performanceTimer->start();
 
   const auto saveSessionSelections = [&](QSettings &settings) {
     settings.setValue("session/hasColorTarget", sessionSelections.hasColorTarget);
@@ -428,19 +480,29 @@ int main(int argc, char **argv) {
                                  const SessionSelections &selections,
                                  bool isReconfigure = false) -> bool {
     const AppSettings effectiveSettings = settings.withQualityModeApplied();
-    const int nfftThreads = std::max(1, settings.nthreads - 3);
-    fftwf_plan_with_nthreads(nfftThreads);
+    renderedFrames = 0;
+    performanceWindows = 0;
+    lowPerformanceWindows = 0;
+    performanceWarningShown = false;
+    fftwf_plan_with_nthreads(settings.nthreads);
 
     // On a reconfigure we never auto-open the blocking ROI selector,
     // even when the saved setting says selectROI is true.
     const bool showROI = settings.selectROI && !isReconfigure;
 
     CameraFeed *newCamFeed = new CameraFeed(settings.deviceIndex, settings.flip,
-                                            showROI, settings.fps);
+                                             showROI, settings.fps,
+                                             settings.cameraWidth,
+                                             settings.cameraHeight);
     if (!newCamFeed->isOpen()) {
       delete newCamFeed;
       return false;
     }
+    vp->setWindowTitle(
+        QString("GravyLensing - Camera %1 x %2 at %3 fps")
+            .arg(newCamFeed->actualWidth())
+            .arg(newCamFeed->actualHeight())
+            .arg(newCamFeed->actualFps(), 0, 'f', 1));
 
     SegmentationWorker *newSegWorker = nullptr;
     bool newPersonModeAvailable = false;
@@ -472,12 +534,18 @@ int main(int argc, char **argv) {
     newColorWorker->setTrackedBlobMode(settings.colorModeType == "tracked_blob");
     newColorWorker->setTolerances(settings.colorHueTol, settings.colorSatTol,
                                   settings.colorValTol);
+    newColorWorker->setTrackingTuning(
+        settings.colorMinObjectArea, settings.colorPersistenceFrames,
+        settings.colorMaskSmooth);
 
     LensingWorker *newLensWorker =
         new LensingWorker(settings.strength, settings.softening,
-                          settings.padFactor, nfftThreads,
-                          effectiveSettings.lowerRes, settings.distortInside,
-                          effectiveSettings.lensMassBlurSigma());
+                           settings.padFactor, settings.nthreads,
+                           effectiveSettings.lowerRes, settings.distortInside,
+                           effectiveSettings.lensMassBlurSigma());
+    QObject::connect(newLensWorker, &LensingWorker::lensedReady, vp,
+                     [&renderedFrames](const cv::Mat &) { ++renderedFrames; },
+                     Qt::QueuedConnection);
 
     QThread *newMaskThread = new QThread;
     QThread *newLensThread = new QThread;
@@ -846,9 +914,16 @@ int main(int argc, char **argv) {
                        const AppSettings previousSettings = activeSettings;
                        const SessionSelections previousSelections =
                            sessionSelections;
-                       const bool backgroundsChanged =
-                           newSettings.backgroundsDir !=
-                           previousSettings.backgroundsDir;
+                        const bool backgroundsChanged =
+                            newSettings.backgroundsDir !=
+                                previousSettings.backgroundsDir ||
+                            newSettings.backgroundWidth !=
+                                previousSettings.backgroundWidth ||
+                            newSettings.backgroundHeight !=
+                                previousSettings.backgroundHeight ||
+                            newSettings.backgroundFitMode !=
+                                previousSettings.backgroundFitMode ||
+                            newSettings.rebuildBackgroundCache;
                        const bool actuallySwitchedToColor =
                            previousSettings.maskMode != "color" &&
                            newSettings.maskMode == "color";
@@ -873,8 +948,12 @@ int main(int argc, char **argv) {
                       // No need to BlockingQueuedConnection-query workers.
 
                        if (backgroundsChanged &&
-                           !backgrounds->setDirectory(
-                               newSettings.backgroundsDir)) {
+                           !backgrounds->setSource(
+                               newSettings.backgroundsDir,
+                               newSettings.backgroundWidth,
+                               newSettings.backgroundHeight,
+                               newSettings.backgroundFitMode,
+                               newSettings.rebuildBackgroundCache)) {
                          QMessageBox::warning(
                              vp, "Backgrounds Not Changed",
                              "No supported images could be loaded from the "
@@ -897,8 +976,11 @@ int main(int argc, char **argv) {
                          sessionSelections = previousSelections;
 
                          if (backgroundsChanged) {
-                           backgrounds->setDirectory(
-                               previousSettings.backgroundsDir);
+                           backgrounds->setSource(
+                               previousSettings.backgroundsDir,
+                               previousSettings.backgroundWidth,
+                               previousSettings.backgroundHeight,
+                               previousSettings.backgroundFitMode);
                            vp->setBackgroundImages(backgrounds);
                          }
 
@@ -917,7 +999,9 @@ int main(int argc, char **argv) {
                        return;
                      }
 
-                      activeSettings = newSettings;
+                       activeSettings = newSettings;
+                       activeSettings.rebuildBackgroundCache = false;
+                       vp->setSettings(activeSettings);
                       vp->setColorTarget(sessionSelections.hue,
                                           sessionSelections.sat,
                                           sessionSelections.val,

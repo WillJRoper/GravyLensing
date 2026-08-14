@@ -55,7 +55,7 @@ class CameraFeed : public QObject {
 
 public:
   CameraFeed(int deviceIndex = 0, bool flip = false, bool selectROI = false,
-             int fps = 30);
+              int fps = 30, int width = 1280, int height = 720);
   ~CameraFeed();
 
   /// Start continuous capture in this thread
@@ -84,6 +84,9 @@ public:
 
   // Is the camera open?
   bool isOpen() const { return isOpen_; }
+  int actualWidth() const;
+  int actualHeight() const;
+  double actualFps() const;
 
   /// Query the current ROI state so it can be preserved across restarts.
   bool hasROI() const { return doingROI_.load(); }
@@ -116,6 +119,8 @@ private:
   // The device index for the camera (0 for default camera)
   int deviceIndex_;
   int fps_ = 30;
+  int width_ = 1280;
+  int height_ = 720;
 
   // OpenCV video capture object
   cv::VideoCapture cap_;

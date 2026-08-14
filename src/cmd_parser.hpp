@@ -40,7 +40,6 @@ class CommandLineOptions {
 public:
   // Command-line options
   int nthreads;
-  bool automaticThreads;
   float strength;
   float softening;
   int deviceIndex;
@@ -49,8 +48,8 @@ public:
   int padFactor;
   int visionSize;
   float temporalSmooth;
-  int personSensitivity;
   float lowerRes;
+  int personSensitivity;
   std::string qualityMode;
   int secondsPerBackground;
   bool distortInside;
@@ -71,7 +70,7 @@ public:
     // --nthreads <int>
     QCommandLineOption nthreadsOption(
         QStringList() << "n" << "nthreads",
-        "Number of CPU threads used in the calculation (must be >= 2).",
+        "Number of worker threads used for lensing (must be >= 1).",
         "nthreads", QString::number(defaults.nthreads));
     parser.addOption(nthreadsOption);
 
@@ -138,18 +137,17 @@ public:
         "temporalSmooth", QString::number(defaults.temporalSmooth));
     parser.addOption(temporalSmoothOption);
 
+    QCommandLineOption lowerResOption(
+        QStringList() << "lr" << "lowerRes",
+        "Internal lensing calculation scale from 0.1 to 1.0.", "lowerRes",
+        QString::number(defaults.lowerRes));
+    parser.addOption(lowerResOption);
+
     QCommandLineOption personSensitivityOption(
         QStringList() << "personSensitivity",
         "Person detection sensitivity from 0 (strict) to 100 (sensitive).",
         "personSensitivity", QString::number(defaults.personSensitivity));
     parser.addOption(personSensitivityOption);
-
-    // lowerRes <float> (default 0.5)
-    QCommandLineOption lowerResOption(
-        QStringList() << "lr" << "lowerRes",
-        "Lower resolution factor for the lensing effect (float, default=0.5).",
-        "lowerRes", QString::number(defaults.lowerRes));
-    parser.addOption(lowerResOption);
 
     QCommandLineOption qualityModeOption(
         QStringList() << "quality" << "qualityMode",
@@ -217,12 +215,10 @@ public:
     };
 
     opts.nthreads = parser.value(nthreadsOption).toInt(&ok);
-    if (!ok || opts.nthreads < 2) {
-      std::cerr << "Error: --nthreads must be an integer >= 2.\n";
+    if (!ok || opts.nthreads < 1) {
+      std::cerr << "Error: --nthreads must be a positive integer.\n";
       std::exit(-1);
     }
-    opts.automaticThreads =
-        parser.isSet(nthreadsOption) ? false : defaults.automaticThreads;
 
     opts.strength = parser.value(strengthOption).toFloat(&ok);
     if (!ok) {
@@ -269,15 +265,15 @@ public:
       std::exit(-1);
     }
 
-    opts.personSensitivity = parser.value(personSensitivityOption).toInt(&ok);
-    if (!ok || opts.personSensitivity < 0 || opts.personSensitivity > 100) {
-      std::cerr << "Error: --personSensitivity must be between 0 and 100.\n";
+    opts.lowerRes = parser.value(lowerResOption).toFloat(&ok);
+    if (!ok || opts.lowerRes < 0.1f || opts.lowerRes > 1.0f) {
+      std::cerr << "Error: --lowerRes must be between 0.1 and 1.0.\n";
       std::exit(-1);
     }
 
-    opts.lowerRes = parser.value(lowerResOption).toFloat(&ok);
-    if (!ok) {
-      std::cerr << "Error: --lowerRes must be a float.\n";
+    opts.personSensitivity = parser.value(personSensitivityOption).toInt(&ok);
+    if (!ok || opts.personSensitivity < 0 || opts.personSensitivity > 100) {
+      std::cerr << "Error: --personSensitivity must be between 0 and 100.\n";
       std::exit(-1);
     }
 

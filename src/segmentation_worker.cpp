@@ -29,6 +29,7 @@
 // Local includes
 #include "vision_segmentation_helper.hpp"
 #include "perf_log.hpp"
+#include "processing_geometry.hpp"
 #include "segmentation_worker.hpp"
 
 namespace {
@@ -265,9 +266,6 @@ static void computePixelMedian(const std::vector<cv::Mat> &history,
  *
  * @param visionSize The Vision request size (default is 512).
  * @param temporalSmooth The smoothing factor for temporal frames [0,1]
- * @param lowerRes The lower resolution factor for the lensing effect. The
- *   resolution at which the lensing effect is calculed will be this much
- *   smaller than the background resolution.
  */
 SegmentationWorker::SegmentationWorker(int visionSize,
                                        float temporalSmooth, float lowerRes,
@@ -602,5 +600,6 @@ void SegmentationWorker::beginShutdown() {
  */
 void SegmentationWorker::onBackgroundChange(const cv::Mat &background) {
   // Update the geometry to match the new background
-  updateGeometry(background.cols * lowerRes_, background.rows * lowerRes_);
+  const cv::Size size = calculationSize(background.size(), lowerRes_);
+  updateGeometry(size.width, size.height);
 }

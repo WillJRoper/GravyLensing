@@ -33,16 +33,20 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListWidget>
+#include <QMessageBox>
 #include <QSignalBlocker>
 #include <QScrollArea>
 #include <QSlider>
 #include <QSizePolicy>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #ifdef __APPLE__
 #include "avfoundation_camera.hpp"
 #endif
+
 #include "backgrounds.hpp"
 
 static QDoubleSpinBox *makeDoubleSpin(double min, double max, double step,
@@ -120,6 +124,39 @@ static void addFormRow(QFormLayout *form, const QString &label,
   form->addRow(makeFormLabel(label, tooltip), fieldLayout);
 }
 
+static QVBoxLayout *addSettingsPage(QStackedWidget *pages,
+                                    const QString &title,
+                                    const QString &summary) {
+  auto *scrollArea = new QScrollArea;
+  scrollArea->setWidgetResizable(true);
+  scrollArea->setFrameShape(QFrame::NoFrame);
+
+  auto *content = new QWidget;
+  auto *layout = new QVBoxLayout(content);
+  layout->setContentsMargins(24, 18, 24, 24);
+  layout->setSpacing(16);
+
+  auto *heading = new QLabel(title);
+  QFont headingFont = heading->font();
+  headingFont.setPointSize(22);
+  headingFont.setWeight(QFont::DemiBold);
+  heading->setFont(headingFont);
+  layout->addWidget(heading);
+
+  auto *description = new QLabel(summary);
+  description->setWordWrap(true);
+  description->setForegroundRole(QPalette::PlaceholderText);
+  layout->addWidget(description);
+
+  auto *separator = new QFrame;
+  separator->setFrameShape(QFrame::HLine);
+  layout->addWidget(separator);
+
+  scrollArea->setWidget(content);
+  pages->addWidget(scrollArea);
+  return layout;
+}
+
 SettingsDialog::SettingsDialog(const AppSettings &settings,
                                const QString &windowTitle,
                                const QString &acceptLabel,
@@ -131,53 +168,56 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
     : QDialog(parent) {
 
   setWindowTitle(windowTitle);
-  setMinimumWidth(760);
-  resize(920, 720);
+  setMinimumWidth(820);
+  resize(960, 720);
   setSizeGripEnabled(true);
 
   auto *mainLayout = new QVBoxLayout(this);
-  mainLayout->setContentsMargins(20, 20, 20, 14);
+  mainLayout->setContentsMargins(14, 14, 14, 14);
   mainLayout->setSpacing(12);
 
-  auto *scrollArea = new QScrollArea(this);
-  scrollArea->setWidgetResizable(true);
-  scrollArea->setFrameShape(QFrame::NoFrame);
-  mainLayout->addWidget(scrollArea, 1);
+  auto *body = new QHBoxLayout;
+  body->setSpacing(12);
+  mainLayout->addLayout(body, 1);
 
-  auto *content = new QWidget(scrollArea);
-  scrollArea->setWidget(content);
+  auto *sidebar = new QListWidget;
+  sidebar->setObjectName("settingsSidebar");
+  sidebar->setFixedWidth(190);
+  sidebar->setSpacing(2);
+  sidebar->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  sidebar->addItems({"Lens", "Camera & Region", "Lensing Effect",
+                     "Backgrounds", "Advanced"});
+  sidebar->setStyleSheet(
+      "QListWidget#settingsSidebar { background: palette(alternate-base); "
+      "border: 0; border-radius: 12px; padding: 8px; outline: 0; }"
+      "QListWidget#settingsSidebar::item { border-radius: 7px; padding: 10px "
+      "12px; }"
+      "QListWidget#settingsSidebar::item:selected { "
+      "background: palette(highlight); color: palette(highlighted-text); }");
+  body->addWidget(sidebar);
 
-  auto *contentLayout = new QVBoxLayout(content);
-  contentLayout->setContentsMargins(0, 0, 0, 0);
-  contentLayout->setSpacing(16);
+  auto *pages = new QStackedWidget;
+  body->addWidget(pages, 1);
 
-  auto *heading = new QLabel(windowTitle);
-  QFont headingFont = heading->font();
-  headingFont.setPointSize(20);
-  headingFont.setWeight(QFont::DemiBold);
-  heading->setFont(headingFont);
-  contentLayout->addWidget(heading);
+  auto *subjectPage = addSettingsPage(
+      pages, "Lens",
+      "Choose what acts as the lens and tune how it is detected.");
+  auto *cameraPage = addSettingsPage(
+      pages, "Camera & Region",
+      "Select the camera, preview behavior, frame rate, and active image area.");
+  auto *effectPage = addSettingsPage(
+      pages, "Lensing Effect",
+      "Shape the strength, width, and appearance of the gravitational lens.");
+  auto *backgroundsPage = addSettingsPage(
+      pages, "Backgrounds",
+      "Choose the images seen through the lens and control automatic cycling.");
+  auto *advancedPage = addSettingsPage(
+      pages, "Advanced",
+      "Performance and diagnostic controls. Recommended defaults suit most Macs.");
 
-  auto *summary = new QLabel(
-      "Choose how to detect the lensing subject, then start with the recommended "
-      "defaults. You can refine the effect later from Session Settings.");
-  summary->setWordWrap(true);
-  summary->setForegroundRole(QPalette::PlaceholderText);
-  contentLayout->addWidget(summary);
-
-  auto *separator = new QFrame;
-  separator->setFrameShape(QFrame::HLine);
-  separator->setFrameShadow(QFrame::Sunken);
-  contentLayout->addWidget(separator);
-
-  auto *columns = new QHBoxLayout;
-  columns->setSpacing(24);
-  contentLayout->addLayout(columns);
-
-  auto *leftColumn = new QVBoxLayout;
-  auto *rightColumn = new QVBoxLayout;
-  columns->addLayout(leftColumn, 1);
-  columns->addLayout(rightColumn, 1);
+  connect(sidebar, &QListWidget::currentRowChanged, pages,
+          &QStackedWidget::setCurrentIndex);
+  sidebar->setCurrentRow(0);
 
   // ── Camera group ────────────────────────────────────────────────────
   auto *cameraGroup = new QGroupBox("Camera");
@@ -207,6 +247,24 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
              deviceIndexSpin_);
 #endif
 
+  cameraResolutionCombo_ = new QComboBox;
+  cameraResolutionCombo_->setToolTip(
+      "Requested camera capture resolution. The closest format supported by "
+      "the selected camera is used; actual format appears in the session "
+      "window title.");
+  cameraResolutionCombo_->addItem("Automatic", QSize());
+  cameraResolutionCombo_->addItem("480p - 854 x 480", QSize(854, 480));
+  cameraResolutionCombo_->addItem("720p - 1280 x 720 (Recommended)",
+                                  QSize(1280, 720));
+  cameraResolutionCombo_->addItem("1080p - 1920 x 1080", QSize(1920, 1080));
+  const int cameraResolution = cameraResolutionCombo_->findData(
+      QSize(settings.cameraWidth, settings.cameraHeight));
+  cameraResolutionCombo_->setCurrentIndex(cameraResolution >= 0
+                                               ? cameraResolution
+                                               : 0);
+  addFormRow(cameraForm, "Capture resolution",
+             cameraResolutionCombo_->toolTip(), cameraResolutionCombo_);
+
   fpsCombo_ = new QComboBox;
   fpsCombo_->setToolTip(
       "Requested camera frame rate. 30 fps is recommended; lower it if the "
@@ -230,7 +288,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
       "off to use the full frame.");
   selectROICheck_->setChecked(settings.selectROI);
 
-  leftColumn->addWidget(cameraGroup);
+  cameraPage->addWidget(cameraGroup);
 
   // ── Region of Interest ────────────────────────────────────────────
   auto *roiGroup = new QGroupBox("Region of Interest");
@@ -273,10 +331,11 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   });
   roiBtnRow->addWidget(clearRoiBtn);
   roiLayout->addLayout(roiBtnRow);
-  leftColumn->addWidget(roiGroup);
+  cameraPage->addWidget(roiGroup);
+  cameraPage->addStretch(1);
 
   // ── Mode (mask type selection) ─────────────────────────────────────
-  auto *modeGroup = new QGroupBox("Subject Detection");
+  auto *modeGroup = new QGroupBox("Lens Detection");
   auto *modeLayout = new QVBoxLayout(modeGroup);
   auto *modeButtons = new QButtonGroup(modeGroup);
 
@@ -314,7 +373,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
 
   colorDetectionRadio_->setChecked(settings.maskMode == "color");
   personDetectionRadio_->setChecked(settings.maskMode != "color");
-  leftColumn->insertWidget(0, modeGroup);
+  subjectPage->addWidget(modeGroup);
 
   // ── Person Detection group ──────────────────────────────────────────
   auto *personGroup = new QGroupBox("Person Detection");
@@ -413,7 +472,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   connect(personSensitivitySlider_, &QSlider::valueChanged, this,
           updateSensitivityLabel);
 
-  leftColumn->addWidget(personGroup);
+  subjectPage->addWidget(personGroup);
 
   const auto applyQualityPreset = [this](const QString &mode) {
     if (mode == QLatin1String("fast")) {
@@ -577,6 +636,60 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   connect(colorValTolSpin_, qOverload<int>(&QSpinBox::valueChanged),
           brightnessSlider, &QSlider::setValue);
 
+  colorMinObjectAreaSpin_ = makeIntSpin(
+      20, 100000, 100, " px",
+      "Ignore matching objects smaller than this processed-mask area. Increase "
+      "to reject speckles; decrease to track small or distant objects.");
+  colorMinObjectAreaSpin_->setValue(settings.colorMinObjectArea);
+  auto *minObjectRow = new QHBoxLayout;
+  minObjectRow->addWidget(colorMinObjectAreaSpin_);
+  minObjectRow->addStretch(1);
+  addFormRow(colorForm, "Minimum object size",
+             colorMinObjectAreaSpin_->toolTip(), minObjectRow);
+
+  colorPersistenceSpin_ = makeIntSpin(
+      0, 60, 1, " frames",
+      "Keep the last tracked mask briefly when the object disappears. Higher "
+      "values bridge occlusion but can leave a stale mask.");
+  colorPersistenceSpin_->setValue(settings.colorPersistenceFrames);
+  auto *persistenceRow = new QHBoxLayout;
+  persistenceRow->addWidget(colorPersistenceSpin_);
+  persistenceRow->addStretch(1);
+  addFormRow(colorForm, "Tracking persistence",
+             colorPersistenceSpin_->toolTip(), persistenceRow);
+
+  colorMaskStabilitySlider_ = new QSlider(Qt::Horizontal);
+  colorMaskStabilitySlider_->setRange(0, 100);
+  colorMaskStabilitySlider_->setValue(static_cast<int>(
+      std::round((1.0f - settings.colorMaskSmooth) * 100.0f)));
+  colorMaskStabilitySlider_->setToolTip(
+      "Higher values smooth frame-to-frame mask changes. Lower values respond "
+      "faster to movement.");
+  auto *stabilityLabel = new QLabel;
+  const auto updateColorStabilityLabel = [stabilityLabel](int value) {
+    stabilityLabel->setText(value < 35 ? "Responsive"
+                           : value > 65 ? "Stable"
+                                        : "Balanced");
+  };
+  updateColorStabilityLabel(colorMaskStabilitySlider_->value());
+  auto *colorStabilityRow = new QHBoxLayout;
+  colorStabilityRow->addWidget(colorMaskStabilitySlider_, 1);
+  colorStabilityRow->addWidget(stabilityLabel);
+  addFormRow(colorForm, "Mask stability",
+             colorMaskStabilitySlider_->toolTip(), colorStabilityRow);
+  connect(colorMaskStabilitySlider_, &QSlider::valueChanged, this,
+          updateColorStabilityLabel);
+
+  const auto syncTrackedColorControls = [=]() {
+    const bool tracked = trackedColorRadio_->isChecked();
+    colorForm->setRowVisible(minObjectRow, tracked);
+    colorForm->setRowVisible(persistenceRow, tracked);
+    colorForm->setRowVisible(colorStabilityRow, tracked);
+  };
+  connect(trackedColorRadio_, &QRadioButton::toggled, this,
+          [syncTrackedColorControls](bool) { syncTrackedColorControls(); });
+  syncTrackedColorControls();
+
   // Current target preview (click opens QColorDialog)
   {
     auto *swatchRow = new QHBoxLayout;
@@ -617,8 +730,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   colorNote->setWordWrap(true);
   colorNote->setForegroundRole(QPalette::PlaceholderText);
   colorLayout->addWidget(colorNote);
-  leftColumn->addWidget(colorGroup);
-  leftColumn->addStretch(1);
+  subjectPage->addWidget(colorGroup);
+  subjectPage->addStretch(1);
 
   // ── Lensing Effect group ────────────────────────────────────────────
   auto *lensGroup = new QGroupBox("Lensing Effect");
@@ -626,7 +739,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   configureFormLayout(lensForm);
 
   strengthSpin_ = makeDoubleSpin(0.0, 10.0, 0.05, 2, {},
-      "Controls how strongly the background bends around the subject. Larger "
+      "Controls how strongly the background bends around the lens. Larger "
       "values create a more dramatic effect.");
   strengthSpin_->setValue(static_cast<double>(settings.strength));
   auto *strengthSlider = new QSlider(Qt::Horizontal);
@@ -650,7 +763,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
           });
 
   softeningSpin_ = makeDoubleSpin(0.0, 200.0, 1.0, 0, " px",
-      "Controls the width and smoothness of the bend around the subject. Larger "
+      "Controls the width and smoothness of the bend around the lens. Larger "
       "values spread the effect over a wider area.");
   softeningSpin_->setValue(static_cast<double>(settings.softening));
   auto *widthSlider = new QSlider(Qt::Horizontal);
@@ -672,55 +785,44 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             widthLabel->setText(QString("%1 px").arg(value, 0, 'f', 0));
           });
 
+  lensEdgeSoftnessSpin_ = makeDoubleSpin(
+      0.0, 5.0, 0.1, 1, {},
+      "Smooths the detected lens boundary before calculating deflection. "
+      "Increase to reduce jagged edges; decrease for a sharper silhouette.");
+  lensEdgeSoftnessSpin_->setValue(settings.lensEdgeSoftness);
+  auto *edgeSoftnessSlider = new QSlider(Qt::Horizontal);
+  edgeSoftnessSlider->setRange(0, 50);
+  edgeSoftnessSlider->setValue(
+      static_cast<int>(std::round(settings.lensEdgeSoftness * 10.0f)));
+  auto *edgeSoftnessRow = new QHBoxLayout;
+  edgeSoftnessRow->addWidget(edgeSoftnessSlider, 1);
+  edgeSoftnessRow->addWidget(lensEdgeSoftnessSpin_);
+  addFormRow(lensForm, "Lens edge softness",
+             lensEdgeSoftnessSpin_->toolTip(), edgeSoftnessRow);
+  connect(edgeSoftnessSlider, &QSlider::valueChanged, this, [this](int value) {
+    lensEdgeSoftnessSpin_->setValue(value / 10.0);
+  });
+  connect(lensEdgeSoftnessSpin_,
+          qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+          [edgeSoftnessSlider](double value) {
+            edgeSoftnessSlider->setValue(
+                static_cast<int>(std::round(value * 10.0)));
+          });
+
   padFactorSpin_ = makeIntSpin(1, 10, 1, {},
       "Advanced: extra calculation space used to prevent edge wrap-around. "
       "Increase only if distortion appears on the opposite screen edge.");
   padFactorSpin_->setValue(settings.padFactor);
 
-  lowerResSpin_ = makeDoubleSpin(0.1, 1.0, 0.1, 2, {},
-      "Rendering resolution for the lens effect. Lower values run faster; 1.0 "
-      "is sharpest but uses the most processing power.");
-  lowerResSpin_->setValue(static_cast<double>(settings.lowerRes));
-  QHBoxLayout *lowerResRow = nullptr;
-  {
-    lowerResRow = new QHBoxLayout;
-    auto *lowerResSlider = new QSlider(Qt::Horizontal);
-    lowerResSlider->setRange(10, 100);
-    lowerResSlider->setSingleStep(5);
-    lowerResSlider->setPageStep(10);
-    lowerResSlider->setToolTip(lowerResSpin_->toolTip());
-    lowerResSlider->setValue(
-        static_cast<int>(std::round(lowerResSpin_->value() * 100.0)));
-    lowerResRow->addWidget(lowerResSlider, 1);
-    lowerResRow->addWidget(lowerResSpin_);
-
-    connect(lowerResSlider, &QSlider::valueChanged, this,
-            [this](int value) {
-              const double scaled = static_cast<double>(value) / 100.0;
-              if (!qFuzzyCompare(lowerResSpin_->value(), scaled))
-                lowerResSpin_->setValue(scaled);
-            });
-    connect(lowerResSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
-            this, [lowerResSlider](double value) {
-              const int scaled = static_cast<int>(std::round(value * 100.0));
-              if (lowerResSlider->value() != scaled)
-                lowerResSlider->setValue(scaled);
-            });
-    connect(lowerResSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
-            this, [syncQualityModeFromControls](double) {
-              syncQualityModeFromControls();
-            });
-
-  }
-
-  distortInsideCheck_ = makeCheck("Keep the subject interior clear",
-      "Leave the detected subject area undistorted while bending the background "
+  distortInsideCheck_ = makeCheck("Keep the lens interior clear",
+      "Leave the detected lens area undistorted while bending the background "
       "around it. Turn off to distort the entire detected area.");
   distortInsideCheck_->setChecked(!settings.distortInside);
-  addFormRow(lensForm, "Subject appearance", distortInsideCheck_->toolTip(),
+  addFormRow(lensForm, "Lens appearance", distortInsideCheck_->toolTip(),
               distortInsideCheck_);
 
-  rightColumn->addWidget(lensGroup);
+  effectPage->addWidget(lensGroup);
+  effectPage->addStretch(1);
 
   // ── Backgrounds group ──────────────────────────────────────────────
   auto *bgGroup = new QGroupBox("Backgrounds");
@@ -739,6 +841,82 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   addFormRow(bgForm, "Source",
              "Choose the included collection or a folder of your own images.",
              backgroundSource);
+
+  backgroundResolutionCombo_ = new QComboBox;
+  backgroundResolutionCombo_->setToolTip(
+      "Sets the exact background and FFT geometry. Lower resolutions improve "
+      "frame rate and substantially reduce memory use.");
+  backgroundResolutionCombo_->addItem("Low - 640 x 360", QSize(640, 360));
+  backgroundResolutionCombo_->addItem("480p - 854 x 480", QSize(854, 480));
+  backgroundResolutionCombo_->addItem("540p - 960 x 540", QSize(960, 540));
+  backgroundResolutionCombo_->addItem("720p - 1280 x 720", QSize(1280, 720));
+  backgroundResolutionCombo_->addItem("1080p - 1920 x 1080 (Recommended)",
+                                      QSize(1920, 1080));
+  backgroundResolutionCombo_->addItem("1440p - 2560 x 1440",
+                                      QSize(2560, 1440));
+  backgroundResolutionCombo_->addItem("4K - 3840 x 2160",
+                                      QSize(3840, 2160));
+  backgroundResolutionCombo_->addItem("Custom...", QSize());
+  int resolutionIndex = backgroundResolutionCombo_->findData(
+      QSize(settings.backgroundWidth, settings.backgroundHeight));
+  backgroundResolutionCombo_->setCurrentIndex(
+      resolutionIndex >= 0 ? resolutionIndex
+                           : backgroundResolutionCombo_->count() - 1);
+  addFormRow(bgForm, "Processing size", backgroundResolutionCombo_->toolTip(),
+             backgroundResolutionCombo_);
+
+  backgroundWidthSpin_ = makeIntSpin(
+      320, 7680, 16, " px", "Exact processed background width.");
+  backgroundHeightSpin_ = makeIntSpin(
+      180, 4320, 16, " px", "Exact processed background height.");
+  backgroundWidthSpin_->setValue(settings.backgroundWidth);
+  backgroundHeightSpin_->setValue(settings.backgroundHeight);
+  auto *customResolutionRow = new QHBoxLayout;
+  customResolutionRow->addWidget(backgroundWidthSpin_);
+  customResolutionRow->addWidget(new QLabel("x"));
+  customResolutionRow->addWidget(backgroundHeightSpin_);
+  customResolutionRow->addStretch(1);
+  addFormRow(bgForm, "Custom size",
+             "Explicit width and height used for background preprocessing and "
+             "lensing calculations.",
+             customResolutionRow);
+  bgForm->setRowVisible(customResolutionRow, resolutionIndex < 0);
+  connect(backgroundResolutionCombo_, &QComboBox::currentIndexChanged, this,
+          [this, bgForm, customResolutionRow](int) {
+            const QSize size = backgroundResolutionCombo_->currentData().toSize();
+            const bool custom = size.isEmpty();
+            bgForm->setRowVisible(customResolutionRow, custom);
+            if (!custom) {
+              backgroundWidthSpin_->setValue(size.width());
+              backgroundHeightSpin_->setValue(size.height());
+            }
+            updateBackgroundStatus();
+          });
+  connect(backgroundWidthSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+          [this](int) { updateBackgroundStatus(); });
+  connect(backgroundHeightSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+          [this](int) { updateBackgroundStatus(); });
+
+  backgroundFitCombo_ = new QComboBox;
+  backgroundFitCombo_->setToolTip(
+      "Controls how images with a different aspect ratio fill the selected "
+      "processing size.");
+  backgroundFitCombo_->addItem("Crop to Fill - No bars (Recommended)", "crop");
+  backgroundFitCombo_->addItem("Fit with Bars - Show whole image", "fit");
+  backgroundFitCombo_->addItem("Stretch to Fill - May distort", "stretch");
+  const int fitIndex = backgroundFitCombo_->findData(
+      QString::fromStdString(settings.backgroundFitMode));
+  backgroundFitCombo_->setCurrentIndex(fitIndex >= 0 ? fitIndex : 0);
+  addFormRow(bgForm, "Image fitting", backgroundFitCombo_->toolTip(),
+             backgroundFitCombo_);
+  auto *resolutionGuidance = new QLabel(
+      "Resolution controls the amount of work in every frame; frame rate "
+      "controls how often that work repeats. If performance drops, lower "
+      "resolution first, then lower the camera frame rate. 1080p at 30 fps is "
+      "the recommended starting point.");
+  resolutionGuidance->setWordWrap(true);
+  resolutionGuidance->setForegroundRole(QPalette::PlaceholderText);
+  bgForm->addRow({}, resolutionGuidance);
 
   QHBoxLayout *backgroundFolderRow = nullptr;
   {
@@ -766,6 +944,31 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
         customBackgroundsRadio_->setChecked(true);
         backgroundsDirEdit_->setText(dir);
         backgroundsDirEdit_->setToolTip(dir);
+        const size_t count =
+            Backgrounds::discoverableImageCount(dir.toStdString());
+        const QString formats =
+            "Images do not need to be TIFFs. Supported formats are PNG, JPEG, "
+            "BMP, GIF, TIFF, WebP, and SVG when a decoder is available.";
+        const QString resolution =
+            QString("Images will be preprocessed and cached at %1 x %2. Higher "
+                    "resolution and frame-rate targets require substantially "
+                    "more processing power.")
+                .arg(backgroundWidthSpin_->value())
+                .arg(backgroundHeightSpin_->value());
+        if (count == 0) {
+          QMessageBox::warning(
+              this, "No Usable Backgrounds",
+              "No readable background images were found in this folder.\n\n" +
+                  formats + "\n\n" + resolution);
+        } else {
+          QMessageBox::information(
+              this, "Background Folder Ready",
+              QString("Found %1 usable background%2.\n\n%3\n\n%4")
+                  .arg(count)
+                  .arg(count == 1 ? "" : "s")
+                  .arg(formats)
+                  .arg(resolution));
+        }
       }
     });
     connect(backgroundsDirEdit_, &QLineEdit::textChanged, this,
@@ -779,6 +982,29 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   backgroundStatus_->setWordWrap(true);
   backgroundStatus_->setForegroundRole(QPalette::PlaceholderText);
   bgForm->addRow({}, backgroundStatus_);
+  auto *cacheStatus = new QLabel;
+  cacheStatus->setForegroundRole(QPalette::PlaceholderText);
+  const auto updateCacheStatus = [cacheStatus]() {
+    cacheStatus->setText(
+        QString("%1 processed image%2, %3 MB on disk")
+            .arg(Backgrounds::cacheImageCount())
+            .arg(Backgrounds::cacheImageCount() == 1 ? "" : "s")
+            .arg(Backgrounds::cacheSizeBytes() / (1024.0 * 1024.0), 0, 'f', 1));
+  };
+  updateCacheStatus();
+  auto *rebuildCache = new QPushButton("Rebuild Cache");
+  rebuildCache->setToolTip(
+      "Clear processed backgrounds and rebuild the selected source at the "
+      "current resolution and fitting mode.");
+  auto *cacheRow = new QHBoxLayout;
+  cacheRow->addWidget(cacheStatus, 1);
+  cacheRow->addWidget(rebuildCache);
+  addFormRow(bgForm, "Cache", rebuildCache->toolTip(), cacheRow);
+  connect(rebuildCache, &QPushButton::clicked, this, [=]() {
+    backgroundCacheRebuildRequested_ = true;
+    rebuildCache->setText("Rebuild on Save");
+    rebuildCache->setEnabled(false);
+  });
   const bool includedBackgrounds =
       settings.backgroundsDir == AppSettings().backgroundsDir;
   includedBackgroundsRadio_->setChecked(includedBackgrounds);
@@ -814,35 +1040,48 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   addFormRow(bgForm, "Cycle interval", secondsPerBackgroundSpin_->toolTip(),
              secondsPerBackgroundSpin_);
 
-  rightColumn->addWidget(bgGroup);
+  backgroundsPage->addWidget(bgGroup);
+  backgroundsPage->addStretch(1);
 
   // ── Performance group ───────────────────────────────────────────────
   auto *perfGroup = new QGroupBox("Advanced");
   auto *perfForm = new QFormLayout(perfGroup);
   configureFormLayout(perfForm);
 
-  nthreadsSpin_ = makeIntSpin(2, 256, 1, {},
-      "Advanced: total CPU threads available to processing. Leave this at the "
-      "default unless performance testing shows a reason to change it.");
+  nthreadsSpin_ = makeIntSpin(
+      1, 256, 1, {},
+      QString("Worker threads used for lensing. This Mac reports %1 logical "
+              "cores; the default leaves two available for the camera, UI, "
+              "and system.")
+          .arg(QThread::idealThreadCount()));
   nthreadsSpin_->setValue(settings.nthreads);
-  automaticThreadsCheck_ = new QCheckBox(
-      QString("Automatic (%1 threads)").arg(AppSettings::recommendedThreads()));
-  automaticThreadsCheck_->setToolTip(
-      "Use the Mac's available processor cores automatically. Recommended for "
-      "nearly all users.");
-  automaticThreadsCheck_->setChecked(settings.automaticThreads);
-  nthreadsSpin_->setVisible(!settings.automaticThreads);
-  auto *threadRow = new QHBoxLayout;
-  threadRow->addWidget(automaticThreadsCheck_);
-  threadRow->addWidget(nthreadsSpin_);
-  threadRow->addStretch(1);
-  addFormRow(perfForm, "CPU allocation", automaticThreadsCheck_->toolTip(),
-             threadRow);
-  connect(automaticThreadsCheck_, &QCheckBox::toggled, nthreadsSpin_,
-          [this](bool automatic) {
-            nthreadsSpin_->setVisible(!automatic);
-            if (automatic)
-              nthreadsSpin_->setValue(AppSettings::recommendedThreads());
+  addFormRow(perfForm, "Worker threads", nthreadsSpin_->toolTip(),
+             nthreadsSpin_);
+
+  lowerResSpin_ = makeDoubleSpin(
+      0.1, 1.0, 0.05, 2, {},
+      "Fraction of the cached background resolution used for masks, FFTs, and "
+      "lensing calculations. The result is upscaled to the exact background "
+      "size. Normally controlled by the Quality preset.");
+  lowerResSpin_->setValue(settings.lowerRes);
+  auto *lowerResSlider = new QSlider(Qt::Horizontal);
+  lowerResSlider->setRange(10, 100);
+  lowerResSlider->setSingleStep(5);
+  lowerResSlider->setValue(
+      static_cast<int>(std::round(settings.lowerRes * 100.0f)));
+  auto *lowerResRow = new QHBoxLayout;
+  lowerResRow->addWidget(lowerResSlider, 1);
+  lowerResRow->addWidget(lowerResSpin_);
+  addFormRow(perfForm, "Calculation scale", lowerResSpin_->toolTip(),
+             lowerResRow);
+  connect(lowerResSlider, &QSlider::valueChanged, this, [this](int value) {
+    lowerResSpin_->setValue(value / 100.0);
+  });
+  connect(lowerResSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+          [lowerResSlider, syncQualityModeFromControls](double value) {
+            lowerResSlider->setValue(
+                static_cast<int>(std::round(value * 100.0)));
+            syncQualityModeFromControls();
           });
 
   auto *paddingCombo = new QComboBox;
@@ -875,9 +1114,6 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             paddingCombo->setCurrentIndex(
                 preset >= 0 ? preset : paddingCombo->count() - 1);
           });
-  addFormRow(perfForm, "Render resolution", lowerResSpin_->toolTip(),
-             lowerResRow);
-
   const auto syncCustomQualityControls = [=]() {
     const bool custom =
         qualityModeCombo_->currentData().toString() == QLatin1String("custom");
@@ -896,7 +1132,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   addFormRow(perfForm, "Debug grid", debugGridCheck_->toolTip(),
              debugGridCheck_);
 
-  rightColumn->addWidget(perfGroup);
+  advancedPage->addWidget(perfGroup);
 
   // ── Note about restart ──────────────────────────────────────────────
   auto *note = new QLabel(
@@ -905,8 +1141,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   note->setWordWrap(true);
   note->setStyleSheet(
       "QLabel { color: #888; font-size: 11px; padding-top: 6px; }");
-  rightColumn->addWidget(note);
-  rightColumn->addStretch(1);
+  advancedPage->addWidget(note);
+  advancedPage->addStretch(1);
 
   const auto syncModeGroups = [=]() {
     const bool colorMode = colorDetectionRadio_->isChecked();
@@ -941,6 +1177,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             deviceIndexSpin_->setValue(defaults.deviceIndex);
 #endif
             { const int idx = fpsCombo_->findData(defaults.fps); if (idx >= 0) fpsCombo_->setCurrentIndex(idx); }
+            { const int idx = cameraResolutionCombo_->findData(QSize(defaults.cameraWidth, defaults.cameraHeight)); if (idx >= 0) cameraResolutionCombo_->setCurrentIndex(idx); }
             flipCheck_->setChecked(defaults.flip);
             selectROICheck_->setChecked(defaults.selectROI);
             colorDetectionRadio_->setChecked(defaults.maskMode == "color");
@@ -952,24 +1189,31 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             colorHueTolSpin_->setValue(defaults.colorHueTol);
             colorSatTolSpin_->setValue(defaults.colorSatTol);
             colorValTolSpin_->setValue(defaults.colorValTol);
+            colorMinObjectAreaSpin_->setValue(defaults.colorMinObjectArea);
+            colorPersistenceSpin_->setValue(defaults.colorPersistenceFrames);
+            colorMaskStabilitySlider_->setValue(static_cast<int>(
+                std::round((1.0f - defaults.colorMaskSmooth) * 100.0f)));
             visionSizeSpin_->setValue(defaults.visionSize);
             { const int idx = qualityModeCombo_->findData(QString::fromStdString(defaults.qualityMode)); if (idx >= 0) qualityModeCombo_->setCurrentIndex(idx); }
             temporalSmoothSpin_->setValue(
                 static_cast<double>(defaults.temporalSmooth));
+            lowerResSpin_->setValue(defaults.lowerRes);
             personSensitivitySlider_->setValue(defaults.personSensitivity);
             strengthSpin_->setValue(
                 static_cast<double>(defaults.strength));
             softeningSpin_->setValue(
                 static_cast<double>(defaults.softening));
+            lensEdgeSoftnessSpin_->setValue(defaults.lensEdgeSoftness);
             padFactorSpin_->setValue(defaults.padFactor);
-            automaticThreadsCheck_->setChecked(defaults.automaticThreads);
-            lowerResSpin_->setValue(
-                static_cast<double>(defaults.lowerRes));
             distortInsideCheck_->setChecked(!defaults.distortInside);
             nthreadsSpin_->setValue(defaults.nthreads);
             backgroundsDirEdit_->setText(
                 QString::fromStdString(defaults.backgroundsDir));
             includedBackgroundsRadio_->setChecked(true);
+            backgroundWidthSpin_->setValue(defaults.backgroundWidth);
+            backgroundHeightSpin_->setValue(defaults.backgroundHeight);
+            { const int idx = backgroundResolutionCombo_->findData(QSize(defaults.backgroundWidth, defaults.backgroundHeight)); if (idx >= 0) backgroundResolutionCombo_->setCurrentIndex(idx); }
+            { const int idx = backgroundFitCombo_->findData(QString::fromStdString(defaults.backgroundFitMode)); if (idx >= 0) backgroundFitCombo_->setCurrentIndex(idx); }
             autoCycleCheck_->setChecked(defaults.secondsPerBackground > 0);
             secondsPerBackgroundSpin_->setValue(
                 std::max(1, defaults.secondsPerBackground));
@@ -992,13 +1236,15 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
 AppSettings SettingsDialog::settings() const {
   AppSettings s;
   s.nthreads = nthreadsSpin_->value();
-  s.automaticThreads = automaticThreadsCheck_->isChecked();
 #ifdef __APPLE__
   s.deviceIndex = cameraCombo_->currentData().toInt();
 #else
   s.deviceIndex = deviceIndexSpin_->value();
 #endif
   s.fps = fpsCombo_->currentData().toInt();
+  const QSize cameraSize = cameraResolutionCombo_->currentData().toSize();
+  s.cameraWidth = cameraSize.width();
+  s.cameraHeight = cameraSize.height();
   s.flip = flipCheck_->isChecked();
   s.selectROI = selectROICheck_->isChecked();
   s.maskMode = colorDetectionRadio_->isChecked() ? "color" : "person";
@@ -1007,18 +1253,29 @@ AppSettings SettingsDialog::settings() const {
   s.colorHueTol = colorHueTolSpin_->value();
   s.colorSatTol = colorSatTolSpin_->value();
   s.colorValTol = colorValTolSpin_->value();
+  s.colorMinObjectArea = colorMinObjectAreaSpin_->value();
+  s.colorPersistenceFrames = colorPersistenceSpin_->value();
+  s.colorMaskSmooth =
+      1.0f - colorMaskStabilitySlider_->value() / 100.0f;
   s.visionSize = visionSizeSpin_->value();
   s.qualityMode = qualityModeCombo_->currentData().toString().toStdString();
   s.strength = static_cast<float>(strengthSpin_->value());
   s.softening = static_cast<float>(softeningSpin_->value());
+  s.lensEdgeSoftness =
+      static_cast<float>(lensEdgeSoftnessSpin_->value());
   s.padFactor = padFactorSpin_->value();
   s.distortInside = !distortInsideCheck_->isChecked();
   s.temporalSmooth = static_cast<float>(temporalSmoothSpin_->value());
-  s.personSensitivity = personSensitivitySlider_->value();
   s.lowerRes = static_cast<float>(lowerResSpin_->value());
+  s.personSensitivity = personSensitivitySlider_->value();
   s.backgroundsDir = includedBackgroundsRadio_->isChecked()
                          ? AppSettings().backgroundsDir
                          : backgroundsDirEdit_->text().toStdString();
+  s.backgroundWidth = backgroundWidthSpin_->value();
+  s.backgroundHeight = backgroundHeightSpin_->value();
+  s.backgroundFitMode =
+      backgroundFitCombo_->currentData().toString().toStdString();
+  s.rebuildBackgroundCache = backgroundCacheRebuildRequested_;
   s.secondsPerBackground =
       autoCycleCheck_->isChecked() ? std::max(1, secondsPerBackgroundSpin_->value()) : -1;
   s.debugGrid = debugGridCheck_->isChecked();
@@ -1056,11 +1313,15 @@ void SettingsDialog::updateBackgroundStatus() {
                               ? AppSettings().backgroundsDir
                               : backgroundsDirEdit_->text().toStdString();
   const size_t count = Backgrounds::discoverableImageCount(dir);
-  backgroundStatus_->setText(
-      count > 0 ? QString("%1 supported image%2 found")
-                      .arg(count)
-                      .arg(count == 1 ? "" : "s")
-                : "No supported images found in this location");
+  const QString sizeNote = QString("; cached at %1 x %2")
+                               .arg(backgroundWidthSpin_->value())
+                               .arg(backgroundHeightSpin_->value());
+  backgroundStatus_->setText(count > 0
+                                 ? QString("%1 supported image%2 found%3")
+                                       .arg(count)
+                                       .arg(count == 1 ? "" : "s")
+                                       .arg(sizeNote)
+                                 : "No supported images found in this location");
 }
 
 void SettingsDialog::openColorPicker() {

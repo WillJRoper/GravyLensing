@@ -7,6 +7,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
+#include <QPainter>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -19,6 +21,60 @@
 #include "settings_dialog.hpp"
 
 namespace {
+
+class SessionBanner final : public QWidget {
+public:
+  explicit SessionBanner(QWidget *parent = nullptr) : QWidget(parent) {
+    setFixedHeight(152);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setAccessibleName("Gravy Lensing");
+  }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QRectF bounds = rect().adjusted(0, 0, -1, -1);
+    QLinearGradient background(bounds.topLeft(), bounds.bottomRight());
+    background.setColorAt(0.0, QColor("#10182f"));
+    background.setColorAt(0.55, QColor("#24204c"));
+    background.setColorAt(1.0, QColor("#512b67"));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(background);
+    painter.drawRoundedRect(bounds, 18, 18);
+
+    const QPointF lens(width() - 112.0, height() / 2.0);
+    painter.setBrush(Qt::NoBrush);
+    for (int radius = 26; radius <= 82; radius += 18) {
+      QColor ring("#d9a7ff");
+      ring.setAlpha(105 - radius / 2);
+      painter.setPen(QPen(ring, radius == 26 ? 3.0 : 1.5));
+      painter.drawEllipse(lens, radius, radius);
+    }
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(255, 255, 255, 230));
+    painter.drawEllipse(lens, 8, 8);
+
+    painter.setPen(Qt::white);
+    QFont titleFont = font();
+    titleFont.setPointSize(28);
+    titleFont.setWeight(QFont::Bold);
+    titleFont.setLetterSpacing(QFont::AbsoluteSpacing, 1.4);
+    painter.setFont(titleFont);
+    painter.drawText(QRectF(28, 30, width() - 180, 48),
+                     Qt::AlignLeft | Qt::AlignVCenter, "GRAVY LENSING");
+
+    QFont subtitleFont = font();
+    subtitleFont.setPointSize(12);
+    subtitleFont.setWeight(QFont::Medium);
+    painter.setFont(subtitleFont);
+    painter.setPen(QColor("#ddd7ef"));
+    painter.drawText(QRectF(30, 82, width() - 190, 28),
+                     Qt::AlignLeft | Qt::AlignVCenter,
+                     "Be dark matter. Bend spacetime. Warp reality.");
+  }
+};
 
 QLabel *description(const QString &text) {
   auto *label = new QLabel(text);
@@ -37,27 +93,30 @@ SessionSetupDialog::SessionSetupDialog(const AppSettings &settings,
     : QDialog(parent), settings_(settings), pickedHue_(currentHue),
       pickedSat_(currentSat), pickedVal_(currentVal), hasTarget_(hasTarget),
       hasROI_(hasROI) {
-  setWindowTitle("Start GravyLensing");
-  setMinimumWidth(620);
-  resize(680, 700);
+  setWindowTitle("Gravy Lensing");
+  setMinimumWidth(660);
+  resize(720, 760);
 
   auto *layout = new QVBoxLayout(this);
   layout->setContentsMargins(24, 22, 24, 18);
   layout->setSpacing(16);
 
-  auto *heading = new QLabel("Start a lensing session");
-  QFont headingFont = heading->font();
-  headingFont.setPointSize(22);
-  headingFont.setWeight(QFont::DemiBold);
-  heading->setFont(headingFont);
-  layout->addWidget(heading);
+  layout->addWidget(new SessionBanner(this));
 
-  auto *intro = new QLabel(
-      "Choose the subject and camera. Recommended defaults work well on most "
-      "Apple Silicon Macs.");
+  auto *intro = new QLabel("Create a new session");
+  QFont introFont = intro->font();
+  introFont.setPointSize(16);
+  introFont.setWeight(QFont::DemiBold);
+  intro->setFont(introFont);
   intro->setWordWrap(true);
-  intro->setForegroundRole(QPalette::PlaceholderText);
   layout->addWidget(intro);
+
+  auto *introDescription = new QLabel(
+      "Choose what creates the lens and how the camera should behave. "
+      "Recommended settings work well on most Apple Silicon Macs.");
+  introDescription->setWordWrap(true);
+  introDescription->setForegroundRole(QPalette::PlaceholderText);
+  layout->addWidget(introDescription);
 
   auto *subjectGroup = new QGroupBox("What should create the lens?");
   auto *subjectLayout = new QVBoxLayout(subjectGroup);
@@ -93,6 +152,17 @@ SessionSetupDialog::SessionSetupDialog(const AppSettings &settings,
   cameraSpin_->setToolTip("Camera 0 is normally the built-in camera.");
   cameraForm->addRow("Camera number", cameraSpin_);
 #endif
+
+  cameraResolutionCombo_ = new QComboBox;
+  cameraResolutionCombo_->setToolTip(
+      "Requested camera capture resolution. The closest format supported by "
+      "the selected camera is used.");
+  cameraResolutionCombo_->addItem("Automatic", QSize());
+  cameraResolutionCombo_->addItem("480p - 854 x 480", QSize(854, 480));
+  cameraResolutionCombo_->addItem("720p - 1280 x 720 (Recommended)",
+                                  QSize(1280, 720));
+  cameraResolutionCombo_->addItem("1080p - 1920 x 1080", QSize(1920, 1080));
+  cameraForm->addRow("Capture resolution", cameraResolutionCombo_);
 
   fpsCombo_ = new QComboBox;
   fpsCombo_->setToolTip(
@@ -164,6 +234,32 @@ SessionSetupDialog::SessionSetupDialog(const AppSettings &settings,
     if (!dir.isEmpty()) {
       customBackgroundsRadio_->setChecked(true);
       backgroundsEdit_->setText(dir);
+      const size_t count =
+          Backgrounds::discoverableImageCount(dir.toStdString());
+      const QString formats =
+          "Images do not need to be TIFFs. Supported formats are PNG, JPEG, "
+          "BMP, GIF, TIFF, WebP, and SVG when a decoder is available.";
+      const QString resolution =
+          QString("Images will be preprocessed and cached at %1 x %2. Higher "
+                  "resolution and frame-rate targets require substantially "
+                  "more processing power. Change this in Settings > "
+                  "Backgrounds.")
+              .arg(settings_.backgroundWidth)
+              .arg(settings_.backgroundHeight);
+      if (count == 0) {
+        QMessageBox::warning(
+            this, "No Usable Backgrounds",
+            "No readable background images were found in this folder.\n\n" +
+                formats + "\n\n" + resolution);
+      } else {
+        QMessageBox::information(
+            this, "Background Folder Ready",
+            QString("Found %1 usable background%2.\n\n%3\n\n%4")
+                .arg(count)
+                .arg(count == 1 ? "" : "s")
+                .arg(formats)
+                .arg(resolution));
+      }
     }
   });
   sessionForm->addRow("Custom folder", backgroundRow);
@@ -183,7 +279,7 @@ SessionSetupDialog::SessionSetupDialog(const AppSettings &settings,
   layout->addWidget(sessionGroup);
 
   auto *actions = new QHBoxLayout;
-  auto *advanced = new QPushButton("Advanced Settings...");
+  auto *advanced = new QPushButton("Settings...");
   advanced->setToolTip("Open all effect, detection, and performance settings.");
   actions->addWidget(advanced);
   actions->addStretch(1);
@@ -196,7 +292,7 @@ SessionSetupDialog::SessionSetupDialog(const AppSettings &settings,
 
   connect(advanced, &QPushButton::clicked, this, [this]() {
     updateSettingsFromControls();
-    SettingsDialog dialog(settings_, "Advanced Settings", "Save",
+    SettingsDialog dialog(settings_, "Settings", "Save",
                           pickedHue_, pickedSat_, pickedVal_, hasTarget_,
                           hasROI_, 0, 0, 0, 0, this);
     if (dialog.exec() != QDialog::Accepted)
@@ -247,6 +343,11 @@ void SessionSetupDialog::applySettingsToControls() {
   customFpsSpin_->setValue(settings_.fps);
   customFpsSpin_->setVisible(fps < 0);
   mirrorCheck_->setChecked(settings_.flip);
+  const int cameraResolution = cameraResolutionCombo_->findData(
+      QSize(settings_.cameraWidth, settings_.cameraHeight));
+  cameraResolutionCombo_->setCurrentIndex(cameraResolution >= 0
+                                               ? cameraResolution
+                                               : 0);
   selectRegionCheck_->setChecked(settings_.selectROI);
   const int quality =
       qualityCombo_->findData(QString::fromStdString(settings_.qualityMode));
@@ -269,6 +370,9 @@ void SessionSetupDialog::updateSettingsFromControls() {
   const int guidedFps = fpsCombo_->currentData().toInt();
   settings_.fps = guidedFps > 0 ? guidedFps : customFpsSpin_->value();
   settings_.flip = mirrorCheck_->isChecked();
+  const QSize cameraSize = cameraResolutionCombo_->currentData().toSize();
+  settings_.cameraWidth = cameraSize.width();
+  settings_.cameraHeight = cameraSize.height();
   settings_.selectROI = selectRegionCheck_->isChecked();
   settings_.qualityMode = qualityCombo_->currentData().toString().toStdString();
   settings_.backgroundsDir = includedBackgroundsRadio_->isChecked()
@@ -281,11 +385,15 @@ void SessionSetupDialog::updateBackgroundStatus() {
                               ? AppSettings().backgroundsDir
                               : backgroundsEdit_->text().toStdString();
   const size_t count = Backgrounds::discoverableImageCount(dir);
-  backgroundStatus_->setText(
-      count > 0 ? QString("%1 supported image%2 found")
-                      .arg(count)
-                      .arg(count == 1 ? "" : "s")
-                : "No supported images found in this location");
+  const QString sizeNote = QString("; cached at %1 x %2")
+                               .arg(settings_.backgroundWidth)
+                               .arg(settings_.backgroundHeight);
+  backgroundStatus_->setText(count > 0
+                                 ? QString("%1 supported image%2 found%3")
+                                       .arg(count)
+                                       .arg(count == 1 ? "" : "s")
+                                       .arg(sizeNote)
+                                 : "No supported images found in this location");
 }
 
 #ifdef __APPLE__

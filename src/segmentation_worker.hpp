@@ -96,10 +96,6 @@ private:
   // Dimensions for the model
   int fastW_, fastH_;
   int width_, height_;
-
-  // The lower resolution factor for the lensing effect. The resolution at which
-  // the lensing effect is calculed will be this much smaller than the
-  // background resolution.
   float lowerRes_;
 
   // The Matrix to hold the mask

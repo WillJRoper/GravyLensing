@@ -87,9 +87,10 @@ private:
 
 private:
   QSpinBox *nthreadsSpin_;
-  QCheckBox *automaticThreadsCheck_;
   QDoubleSpinBox *strengthSpin_;
   QDoubleSpinBox *softeningSpin_;
+  QDoubleSpinBox *lensEdgeSoftnessSpin_;
+  QDoubleSpinBox *lowerResSpin_;
   QSpinBox *visionSizeSpin_;
 #ifdef __APPLE__
   QComboBox *cameraCombo_;
@@ -97,12 +98,12 @@ private:
   QSpinBox *deviceIndexSpin_;
 #endif
   QComboBox *fpsCombo_;
+  QComboBox *cameraResolutionCombo_;
   QComboBox *qualityModeCombo_;
   QCheckBox *debugGridCheck_;
   QSpinBox *padFactorSpin_;
   QDoubleSpinBox *temporalSmoothSpin_;
   QSlider *personSensitivitySlider_;
-  QDoubleSpinBox *lowerResSpin_;
   QCheckBox *distortInsideCheck_;
   QCheckBox *flipCheck_;
   QCheckBox *selectROICheck_;
@@ -113,10 +114,17 @@ private:
   QSpinBox *colorHueTolSpin_;
   QSpinBox *colorSatTolSpin_;
   QSpinBox *colorValTolSpin_;
+  QSpinBox *colorMinObjectAreaSpin_;
+  QSpinBox *colorPersistenceSpin_;
+  QSlider *colorMaskStabilitySlider_;
 
   QLineEdit *backgroundsDirEdit_;
   QRadioButton *includedBackgroundsRadio_;
   QRadioButton *customBackgroundsRadio_;
+  QComboBox *backgroundResolutionCombo_;
+  QSpinBox *backgroundWidthSpin_;
+  QSpinBox *backgroundHeightSpin_;
+  QComboBox *backgroundFitCombo_;
   QLabel *backgroundStatus_;
   QPushButton *browseBgBtn_;
   QCheckBox *autoCycleCheck_;
@@ -133,6 +141,7 @@ private:
 
   bool roiSelectRequested_ = false;
   bool roiClearRequested_ = false;
+  bool backgroundCacheRebuildRequested_ = false;
   bool hasROI_ = false;
   int roiX_ = 0, roiY_ = 0, roiW_ = 0, roiH_ = 0;
   QLabel *roiInfoLabel_ = nullptr;

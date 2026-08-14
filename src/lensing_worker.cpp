@@ -28,6 +28,7 @@
 // Local includes
 #include "lensing_worker.hpp"
 #include "perf_log.hpp"
+#include "processing_geometry.hpp"
 
 #ifdef USE_MPS
 #include "metal_helper.h"
@@ -238,12 +239,9 @@ void fillPaddedMassReflect101(const cv::Mat &mass, float *dst, int padHeight,
  * @param softening The softening parameter for the lensing effect.
  * @param padFactor The padding factor for the lensing effect.
  * @param nthreads The number of threads to use for processing.
- * @param lowerRes The lower resolution factor for the lensing effect. The
- *   resolution at which the lensing effect is calculed will be this much
- *   smaller than the background resolution.
  */
 LensingWorker::LensingWorker(float strength, float softening, int padFactor,
-                             int nthreads, float lowerRes, bool distortInside,
+                              int nthreads, float lowerRes, bool distortInside,
                              float massBlurSigma)
     : strength_(strength), softening_(softening), padFactor_(padFactor),
       nthreads_(nthreads), lowerRes_(lowerRes), distortInside_(distortInside),
@@ -256,7 +254,6 @@ LensingWorker::LensingWorker(float strength, float softening, int padFactor,
   std::cout
       << "[LensingWorker] Number of threads (excluding those taken by Qt): "
       << nthreads_ << "\n";
-  std::cout << "[LensingWorker] Lower resolution factor: " << lowerRes_ << "\n";
   std::cout << "[LensingWorker] Mass blur sigma: " << massBlurSigma_ << "\n";
 }
 
@@ -704,12 +701,12 @@ void LensingWorker::updateGeometry(int width, int height) {
 void LensingWorker::onBackgroundChange(const cv::Mat &background) {
   // Update the current background
   currentBackground_ = background;
+  outputWidth_ = background.cols;
+  outputHeight_ = background.rows;
 
-  // Shrink the background
   cv::resize(currentBackground_, currentBackground_,
-             cv::Size(currentBackground_.cols * lowerRes_,
-                      currentBackground_.rows * lowerRes_),
-             0, 0, cv::INTER_LINEAR);
+             calculationSize(background.size(), lowerRes_),
+             0, 0, cv::INTER_AREA);
 
 #ifdef USE_MPS
   gRenderBackgroundDirty = true;
@@ -728,7 +725,6 @@ void LensingWorker::onBackgroundChange(const cv::Mat &background) {
 void LensingWorker::onMask(const cv::Mat &mask) {
   static thread_local PerfLog perf("lensing", 60);
   static thread_local PerfLog perfApply("lensing-apply", 60);
-  static thread_local PerfLog perfUpsample("lensing-upsample", 60);
 
   // If we don't have a background, theres nothing to do
   if (currentBackground_.empty()) {
@@ -743,16 +739,10 @@ void LensingWorker::onMask(const cv::Mat &mask) {
     applyLensing(mask);
     const auto tApply1 = std::chrono::steady_clock::now();
 
-    // Resample back to the original size
     if (lowerRes_ < 1.0f) {
-      const auto tUp0 = std::chrono::steady_clock::now();
       cv::resize(latestLensed_, upsampledLensed_,
-                 cv::Size(latestLensed_.cols / lowerRes_,
-                          latestLensed_.rows / lowerRes_),
+                 cv::Size(outputWidth_, outputHeight_),
                  0, 0, cv::INTER_LINEAR);
-      const auto tUp1 = std::chrono::steady_clock::now();
-      perfUpsample.addSample(
-          std::chrono::duration<double, std::milli>(tUp1 - tUp0).count());
     } else {
       upsampledLensed_ = latestLensed_;
     }

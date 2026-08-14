@@ -36,24 +36,25 @@
 
 struct AppSettings {
 
-  static int recommendedThreads() {
-    return std::max(4, QThread::idealThreadCount());
+  static int defaultWorkerThreads() {
+    return std::max(1, QThread::idealThreadCount() - 2);
   }
 
   // ── Performance ────────────────────────────────────────────────────
-  int nthreads = recommendedThreads(); // Total CPU threads (Qt reserves 3)
-  bool automaticThreads = true;
+  int nthreads = defaultWorkerThreads(); // Leaves two logical cores available
 
   // ── Lensing ────────────────────────────────────────────────────────
   float strength = 4.0f;        // Deflection multiplier
   float softening = 50.0f;      // Kernel softening radius (px)
   int padFactor = 2;            // FFT padding factor
-  float lowerRes = 0.5f;        // Resolution scale for lensing (0.1–1.0)
+  float lowerRes = 0.5f;        // Internal calculation scale
   bool distortInside = true;    // Lens the interior of the mask too
 
   // ── Camera ─────────────────────────────────────────────────────────
   int deviceIndex = 0;          // OpenCV camera device index
   int fps = 30;                 // Target camera frame rate
+  int cameraWidth = 1280;
+  int cameraHeight = 720;
   bool flip = false;            // Mirror feed horizontally
   bool selectROI = false;       // Open ROI selector on first start
 
@@ -65,6 +66,9 @@ struct AppSettings {
   int colorHueTol = 12;     // ± tolerance around target hue (0-180)
   int colorSatTol = 60;     // ± tolerance around target saturation (0-255)
   int colorValTol = 80;     // ± tolerance around target value (0-255)
+  int colorMinObjectArea = 500;
+  int colorPersistenceFrames = 6;
+  float colorMaskSmooth = 0.5f;
 
   // ── Person detection ───────────────────────────────────────────────
   int visionSize = 512;         // Vision request size (px)
@@ -74,6 +78,11 @@ struct AppSettings {
 
   // ── Runtime ────────────────────────────────────────────────────────
   bool debugGrid = false;       // Show 2x2 diagnostic view
+  int backgroundWidth = 1920;
+  int backgroundHeight = 1080;
+  std::string backgroundFitMode = "crop"; // crop, fit, stretch
+  float lensEdgeSoftness = 1.5f;
+  bool rebuildBackgroundCache = false; // Transient; never persisted
 #ifdef __APPLE__
   std::string backgroundsDir =
       (QCoreApplication::applicationDirPath() + "/../Resources/backgrounds")
@@ -85,16 +94,16 @@ struct AppSettings {
 
   /// True when every field matches.
   bool equals(const AppSettings &other) const {
-    return nthreads == other.nthreads &&
-           automaticThreads == other.automaticThreads &&
-           strength == other.strength &&
+    return nthreads == other.nthreads && strength == other.strength &&
            softening == other.softening && deviceIndex == other.deviceIndex &&
-           fps == other.fps && debugGrid == other.debugGrid && padFactor == other.padFactor &&
+           fps == other.fps && cameraWidth == other.cameraWidth &&
+           cameraHeight == other.cameraHeight &&
+           debugGrid == other.debugGrid && padFactor == other.padFactor &&
+           lowerRes == other.lowerRes &&
            visionSize == other.visionSize &&
            temporalSmooth == other.temporalSmooth &&
            personSensitivity == other.personSensitivity &&
            qualityMode == other.qualityMode &&
-           lowerRes == other.lowerRes &&
            secondsPerBackground == other.secondsPerBackground &&
            distortInside == other.distortInside && flip == other.flip &&
            selectROI == other.selectROI && maskMode == other.maskMode &&
@@ -102,29 +111,40 @@ struct AppSettings {
            colorHueTol == other.colorHueTol &&
            colorSatTol == other.colorSatTol &&
            colorValTol == other.colorValTol &&
-           backgroundsDir == other.backgroundsDir;
+           colorMinObjectArea == other.colorMinObjectArea &&
+           colorPersistenceFrames == other.colorPersistenceFrames &&
+           colorMaskSmooth == other.colorMaskSmooth &&
+           backgroundsDir == other.backgroundsDir &&
+           backgroundWidth == other.backgroundWidth &&
+           backgroundHeight == other.backgroundHeight &&
+           backgroundFitMode == other.backgroundFitMode &&
+           lensEdgeSoftness == other.lensEdgeSoftness &&
+           rebuildBackgroundCache == other.rebuildBackgroundCache;
   }
 
   /// Load from persistent storage, keeping current values as fallbacks.
   void load(QSettings &s) {
-    nthreads = s.value("nthreads", nthreads).toInt();
-    automaticThreads =
-        s.value("automaticThreads", automaticThreads).toBool();
-    if (automaticThreads)
-      nthreads = recommendedThreads();
+    const bool usedAutomaticThreads =
+        s.value("automaticThreads", false).toBool();
+    nthreads = usedAutomaticThreads
+                   ? defaultWorkerThreads()
+                   : s.value("nthreads", nthreads).toInt();
+    s.remove("automaticThreads");
     strength = s.value("strength", strength).toFloat();
     softening = s.value("softening", softening).toFloat();
     deviceIndex = s.value("deviceIndex", deviceIndex).toInt();
     fps = s.value("fps", fps).toInt();
+    cameraWidth = s.value("cameraWidth", cameraWidth).toInt();
+    cameraHeight = s.value("cameraHeight", cameraHeight).toInt();
     debugGrid = s.value("debugGrid", debugGrid).toBool();
     padFactor = s.value("padFactor", padFactor).toInt();
+    lowerRes = s.value("lowerRes", lowerRes).toFloat();
     visionSize = s.value("visionSize", visionSize).toInt();
     temporalSmooth = s.value("temporalSmooth", temporalSmooth).toFloat();
     personSensitivity =
         s.value("personSensitivity", personSensitivity).toInt();
     qualityMode =
         s.value("qualityMode", QString::fromStdString(qualityMode)).toString().toStdString();
-    lowerRes = s.value("lowerRes", lowerRes).toFloat();
     secondsPerBackground =
         s.value("secondsPerBackground", secondsPerBackground).toInt();
     distortInside = s.value("distortInside", distortInside).toBool();
@@ -138,27 +158,40 @@ struct AppSettings {
     colorHueTol = s.value("colorHueTol", colorHueTol).toInt();
     colorSatTol = s.value("colorSatTol", colorSatTol).toInt();
     colorValTol = s.value("colorValTol", colorValTol).toInt();
+    colorMinObjectArea =
+        s.value("colorMinObjectArea", colorMinObjectArea).toInt();
+    colorPersistenceFrames =
+        s.value("colorPersistenceFrames", colorPersistenceFrames).toInt();
+    colorMaskSmooth = s.value("colorMaskSmooth", colorMaskSmooth).toFloat();
     backgroundsDir =
         s.value("backgroundsDir", QString::fromStdString(backgroundsDir))
             .toString()
             .toStdString();
+    backgroundWidth = s.value("backgroundWidth", backgroundWidth).toInt();
+    backgroundHeight = s.value("backgroundHeight", backgroundHeight).toInt();
+    backgroundFitMode =
+        s.value("backgroundFitMode", QString::fromStdString(backgroundFitMode))
+            .toString()
+            .toStdString();
+    lensEdgeSoftness = s.value("lensEdgeSoftness", lensEdgeSoftness).toFloat();
   }
 
   /// Write all fields to persistent storage.
   void save(QSettings &s) const {
     s.setValue("nthreads", nthreads);
-    s.setValue("automaticThreads", automaticThreads);
     s.setValue("strength", strength);
     s.setValue("softening", softening);
     s.setValue("deviceIndex", deviceIndex);
     s.setValue("fps", fps);
+    s.setValue("cameraWidth", cameraWidth);
+    s.setValue("cameraHeight", cameraHeight);
     s.setValue("debugGrid", debugGrid);
     s.setValue("padFactor", padFactor);
+    s.setValue("lowerRes", lowerRes);
     s.setValue("visionSize", visionSize);
     s.setValue("temporalSmooth", temporalSmooth);
     s.setValue("personSensitivity", personSensitivity);
     s.setValue("qualityMode", QString::fromStdString(qualityMode));
-    s.setValue("lowerRes", lowerRes);
     s.setValue("secondsPerBackground", secondsPerBackground);
     s.setValue("distortInside", distortInside);
     s.setValue("flip", flip);
@@ -168,7 +201,14 @@ struct AppSettings {
     s.setValue("colorHueTol", colorHueTol);
     s.setValue("colorSatTol", colorSatTol);
     s.setValue("colorValTol", colorValTol);
+    s.setValue("colorMinObjectArea", colorMinObjectArea);
+    s.setValue("colorPersistenceFrames", colorPersistenceFrames);
+    s.setValue("colorMaskSmooth", colorMaskSmooth);
     s.setValue("backgroundsDir", QString::fromStdString(backgroundsDir));
+    s.setValue("backgroundWidth", backgroundWidth);
+    s.setValue("backgroundHeight", backgroundHeight);
+    s.setValue("backgroundFitMode", QString::fromStdString(backgroundFitMode));
+    s.setValue("lensEdgeSoftness", lensEdgeSoftness);
   }
 
   AppSettings withQualityModeApplied() const {
@@ -190,11 +230,7 @@ struct AppSettings {
   }
 
   float lensMassBlurSigma() const {
-    if (qualityMode == "fast")
-      return 1.0f;
-    if (qualityMode == "high")
-      return 2.0f;
-    return 1.5f;
+    return lensEdgeSoftness;
   }
 
   std::string visionQualityMode() const {

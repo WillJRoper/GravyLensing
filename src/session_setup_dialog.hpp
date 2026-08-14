@@ -50,6 +50,7 @@ private:
   QSpinBox *cameraSpin_ = nullptr;
 #endif
   QComboBox *fpsCombo_ = nullptr;
+  QComboBox *cameraResolutionCombo_ = nullptr;
   QSpinBox *customFpsSpin_ = nullptr;
   QComboBox *qualityCombo_ = nullptr;
   QCheckBox *mirrorCheck_ = nullptr;

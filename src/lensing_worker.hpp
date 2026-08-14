@@ -45,8 +45,9 @@ public:
 
   // Constructor
   LensingWorker(float strength = 1.0f, float softening = 30.0f,
-                int padFactor = 2, int nthreads = 1, float lowerRes = 1.0f,
-                bool distortInside = false, float massBlurSigma = 1.5f);
+                 int padFactor = 2, int nthreads = 1,
+                 float lowerRes = 1.0f, bool distortInside = false,
+                 float massBlurSigma = 1.5f);
 
   // Destructor
   ~LensingWorker();
@@ -93,11 +94,8 @@ private:
 
   // The dimensions
   int width_, height_;
+  int outputWidth_ = 0, outputHeight_ = 0;
   int padWidth_, padHeight_; // padded dimensions for FFTs
-
-  // The lower resolution factor for the lensing effect. The resolution at which
-  // the lensing effect is calculed will be this much smaller than the
-  // background resolution.
   float lowerRes_;
 
   // The current background image

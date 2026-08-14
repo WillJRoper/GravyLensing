@@ -101,7 +101,7 @@ CMake creates `build/GravyLensing.app`.
 
 The guided Session Setup opens with remembered choices for subject detection,
 camera, quality, region, and backgrounds. The recommended defaults require no
-configuration; click **Start Session**. Use **Advanced Settings...** for full
+configuration; click **Start Session**. Use **Settings...** for full
 control.
 
 ### CLI arguments
@@ -113,7 +113,7 @@ saved session setting. Boolean flags accept an explicit `--no-` counterpart.
 Usage: ./gravy_lens [options]
 
 Options:
-  -n, --nthreads <n>              Override automatic CPU thread allocation.
+  -n, --nthreads <n>              Lensing worker threads (default: cores minus 2).
   -s, --strength <f>              Lens strength multiplier (default 4.0).
   -f, --softening <f>             Kernel softening radius in px (default 50.0).
   -m, --visionSize <n>            Vision request size (default 512).
@@ -124,7 +124,7 @@ Options:
   -p, --padFactor <n>             FFT padding multiplier (default 2).
   -t, --temporalSmooth <f>        Mask temporal blending factor (default 0.25).
   --personSensitivity <n>         Person sensitivity, 0–100 (default 50).
-  --lr, --lowerRes <f>            Resolution scale for lensing, 0.1–1.0 (default 0.5).
+  --lr, --lowerRes <f>            Internal calculation scale, 0.1–1.0.
   --quality, --qualityMode <mode>  fast, balanced, high, or custom.
   --sb, --secondsPerBackground <n> Seconds per background; -1 = manual (default -1).
   --di, --distortInside           Also lens the interior of the mask (default on).
@@ -149,6 +149,13 @@ Choose **Person** mode and click **Start Session**.
 - Only settings for the selected detection mode are shown.
 - Recommended presets hide technical controls; **Custom** reveals them.
 - Camera and background choices are validated directly in the dialog.
+- Camera capture resolution can be Automatic, 480p, 720p, or 1080p; the
+  selected camera's actual format appears in the session window title.
+- **Lens Edge Softness** controls boundary smoothing independently of person
+  detection quality.
+- Tracked-colour mode exposes minimum object size, tracking persistence, and
+  mask stability.
+- The Backgrounds page reports processed-cache size and can rebuild it.
 - **Restore Defaults** resets every control to shipped defaults.
 - Colour and ROI selections persist across session restarts.
 
@@ -192,6 +199,19 @@ The macOS app includes a default set of backgrounds. To use your own, open
 the session. Supported images in that directory are discovered automatically;
 use the left and right arrow keys to move through them. **Restore Defaults**
 switches back to the packaged backgrounds.
+
+Background resolution directly affects FFT memory use and frame rate. Before a
+session starts, backgrounds are resized and cached at the selected output size.
+Settings offers presets from 640x360 through 4K, explicit custom width
+and height, and crop, letterbox, or stretch fitting. 1080p at 30 fps is the
+recommended starting point; lower resolution before lowering frame rate when
+performance is poor.
+
+Three resolutions are independent: camera capture resolution controls input,
+background resolution controls cached and final output size, and calculation
+scale controls internal mask and FFT geometry before the result is upscaled.
+Fast, Balanced, and High Quality choose sensible calculation scales; Custom
+reveals the scale directly in the Advanced category.
 
 ### Restarting a session
 
