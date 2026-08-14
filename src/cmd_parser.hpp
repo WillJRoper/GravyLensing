@@ -47,7 +47,7 @@ public:
   int fps;
   bool debugGrid;
   int padFactor;
-  int modelSize;
+  int visionSize;
   float temporalSmooth;
   int personSensitivity;
   float lowerRes;
@@ -57,7 +57,6 @@ public:
   bool flip;
   bool selectROI;
   std::string maskMode;
-  std::string modelPath;
   std::string colorModeType;
 
   // Constructor is also the parser
@@ -91,13 +90,13 @@ public:
         "softening", QString::number(defaults.softening));
     parser.addOption(softeningOption);
 
-    // --modelSize <int> (default 512)
-    QCommandLineOption modelSizeOption(
-        QStringList() << "m" << "modelSize",
-        "Segmentation model size, bigger means more accurate people but at the "
+    // --visionSize <int> (default 512)
+    QCommandLineOption visionSizeOption(
+        QStringList() << "m" << "visionSize",
+        "Vision request size, bigger means more accurate people but at the "
         "expense of frame rate (int, default=512).",
-        "modelSize", QString::number(defaults.modelSize));
-    parser.addOption(modelSizeOption);
+        "visionSize", QString::number(defaults.visionSize));
+    parser.addOption(visionSizeOption);
 
     // --device-index <int> (default 0)
     QCommandLineOption deviceIndexOption(
@@ -129,13 +128,6 @@ public:
         "Padding factor for FFT (int, default=2).", "padFactor",
         QString::number(defaults.padFactor));
     parser.addOption(padFactorOption);
-
-    // --model-path <string>
-    QCommandLineOption modelPathOption(
-        QStringList() << "mp" << "modelPath",
-        "Path to the segmentation model (string).", "modelPath",
-        QString::fromStdString(defaults.modelPath));
-    parser.addOption(modelPathOption);
 
     // --temporal smooth <float> (default is loaded from settings)
     QCommandLineOption temporalSmoothOption(
@@ -244,9 +236,9 @@ public:
       std::exit(-1);
     }
 
-    opts.modelSize = parser.value(modelSizeOption).toInt(&ok);
+    opts.visionSize = parser.value(visionSizeOption).toInt(&ok);
     if (!ok) {
-      std::cerr << "Error: --modelSize must be an integer.\n";
+      std::cerr << "Error: --visionSize must be an integer.\n";
       std::exit(-1);
     }
 
@@ -268,12 +260,6 @@ public:
     opts.padFactor = parser.value(padFactorOption).toInt(&ok);
     if (!ok) {
       std::cerr << "Error: --padFactor must be an integer.\n";
-      std::exit(-1);
-    }
-
-    opts.modelPath = parser.value(modelPathOption).toStdString();
-    if (opts.modelPath.empty()) {
-      std::cerr << "Error: --modelPath must be a non-empty string.\n";
       std::exit(-1);
     }
 

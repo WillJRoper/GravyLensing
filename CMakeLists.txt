@@ -3,6 +3,10 @@ cmake_minimum_required(VERSION 3.10)
 set(GRAVY_VERSION "1.0.0" CACHE STRING "GravyLensing release version")
 project(GravyLensing VERSION ${GRAVY_VERSION} LANGUAGES CXX)
 
+if(NOT APPLE)
+  message(FATAL_ERROR "GravyLensing requires macOS because person detection uses Apple Vision.")
+endif()
+
 # Set C++ standard to C++17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -102,10 +106,6 @@ else()
 endif()
 # Portable threading library
 find_package(Threads REQUIRED)
-# LibTorch fallback for platforms without Apple's Vision framework
-if(NOT APPLE)
-  find_package(Torch REQUIRED)
-endif()
 # Qt6 Widgets for GUI
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
@@ -127,7 +127,6 @@ include_directories("${CMAKE_SOURCE_DIR}/src")
 # Third-party includes
 include_directories(
   ${OpenCV_INCLUDE_DIRS}
-  ${TORCH_INCLUDE_DIRS}
 )
 
 # ============================================================================
@@ -205,7 +204,6 @@ target_link_libraries(gravy_lens PRIVATE
   ${OpenCV_LIBS}
   Threads::Threads
   ${FFTW3_LIBRARIES}
-  ${TORCH_LIBRARIES}
 )
 
 if(APPLE)

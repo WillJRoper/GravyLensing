@@ -281,14 +281,9 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   auto *modeButtons = new QButtonGroup(modeGroup);
 
   personDetectionRadio_ = new QRadioButton("People (Recommended)");
-#ifdef __APPLE__
   personDetectionRadio_->setToolTip(
-      "Automatically detect people with Apple Vision. No colour selection or "
-      "model file is required.");
-#else
-  personDetectionRadio_->setToolTip(
-      "Automatically detect people with the configured segmentation model.");
-#endif
+      "Automatically detect people with Apple Vision. No colour selection is "
+      "required.");
   modeButtons->addButton(personDetectionRadio_);
   modeLayout->addWidget(personDetectionRadio_);
 
@@ -326,53 +321,29 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   auto *personForm = new QFormLayout(personGroup);
   configureFormLayout(personForm);
 
-  {
-    auto *row = new QHBoxLayout;
-    modelPathEdit_ = new QLineEdit(QString::fromStdString(settings.modelPath));
-    modelPathEdit_->setSizePolicy(QSizePolicy::Expanding,
-                                  QSizePolicy::Fixed);
-    modelPathEdit_->setClearButtonEnabled(true);
-    modelPathEdit_->setCursorPosition(modelPathEdit_->text().size());
-    modelPathEdit_->setToolTip(modelPathEdit_->text());
-    modelPathEdit_->setPlaceholderText("Path to TorchScript model...");
-    browseBtn_ = new QPushButton("Browse...");
-    browseBtn_->setToolTip("Open a file dialog to locate the segmentation model.");
-    row->addWidget(modelPathEdit_, 1);
-    row->addWidget(browseBtn_);
-    addFormRow(personForm, "Model path",
-               "Path to the TorchScript segmentation model to load.", row);
-    connect(browseBtn_, &QPushButton::clicked, this,
-            &SettingsDialog::browseModelPath);
-    connect(modelPathEdit_, &QLineEdit::textChanged, this,
-            [this](const QString &text) { modelPathEdit_->setToolTip(text); });
-#ifdef __APPLE__
-    personForm->setRowVisible(row, false);
-#endif
-  }
-
-  modelSizeSpin_ = makeIntSpin(128, 1024, 128, " px",
+  visionSizeSpin_ = makeIntSpin(128, 1024, 128, " px",
       "Advanced: working resolution used for person detection. Larger values "
       "can improve edges but reduce frame rate.");
-  modelSizeSpin_->setValue(settings.modelSize);
-  auto *modelSizeSlider = new QSlider(Qt::Horizontal);
-  modelSizeSlider->setRange(128, 1024);
-  modelSizeSlider->setSingleStep(32);
-  modelSizeSlider->setPageStep(128);
-  modelSizeSlider->setValue(settings.modelSize);
-  modelSizeSlider->setToolTip(modelSizeSpin_->toolTip());
-  auto *modelSizeLabel = new QLabel(QString("%1 px").arg(settings.modelSize));
-  modelSizeLabel->setMinimumWidth(54);
-  auto *modelSizeRow = new QHBoxLayout;
-  modelSizeRow->addWidget(modelSizeSlider, 1);
-  modelSizeRow->addWidget(modelSizeLabel);
-  addFormRow(personForm, "Detection detail", modelSizeSpin_->toolTip(),
-             modelSizeRow);
-  connect(modelSizeSlider, &QSlider::valueChanged, modelSizeSpin_,
+  visionSizeSpin_->setValue(settings.visionSize);
+  auto *visionSizeSlider = new QSlider(Qt::Horizontal);
+  visionSizeSlider->setRange(128, 1024);
+  visionSizeSlider->setSingleStep(32);
+  visionSizeSlider->setPageStep(128);
+  visionSizeSlider->setValue(settings.visionSize);
+  visionSizeSlider->setToolTip(visionSizeSpin_->toolTip());
+  auto *visionSizeLabel = new QLabel(QString("%1 px").arg(settings.visionSize));
+  visionSizeLabel->setMinimumWidth(54);
+  auto *visionSizeRow = new QHBoxLayout;
+  visionSizeRow->addWidget(visionSizeSlider, 1);
+  visionSizeRow->addWidget(visionSizeLabel);
+  addFormRow(personForm, "Detection detail", visionSizeSpin_->toolTip(),
+             visionSizeRow);
+  connect(visionSizeSlider, &QSlider::valueChanged, visionSizeSpin_,
           &QSpinBox::setValue);
-  connect(modelSizeSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
-          [modelSizeSlider, modelSizeLabel](int value) {
-            modelSizeSlider->setValue(value);
-            modelSizeLabel->setText(QString("%1 px").arg(value));
+  connect(visionSizeSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+          [visionSizeSlider, visionSizeLabel](int value) {
+            visionSizeSlider->setValue(value);
+            visionSizeLabel->setText(QString("%1 px").arg(value));
           });
 
   qualityModeCombo_ = new QComboBox;
@@ -446,15 +417,15 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
 
   const auto applyQualityPreset = [this](const QString &mode) {
     if (mode == QLatin1String("fast")) {
-      modelSizeSpin_->setValue(224);
+      visionSizeSpin_->setValue(224);
       temporalSmoothSpin_->setValue(0.16);
       lowerResSpin_->setValue(0.35);
     } else if (mode == QLatin1String("balanced")) {
-      modelSizeSpin_->setValue(512);
+      visionSizeSpin_->setValue(512);
       temporalSmoothSpin_->setValue(0.25);
       lowerResSpin_->setValue(0.50);
     } else if (mode == QLatin1String("high")) {
-      modelSizeSpin_->setValue(640);
+      visionSizeSpin_->setValue(640);
       temporalSmoothSpin_->setValue(0.35);
       lowerResSpin_->setValue(0.75);
     }
@@ -465,15 +436,15 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
       return std::abs(a - b) < 0.01;
     };
     QString mode = "custom";
-    if (modelSizeSpin_->value() == 224 &&
+    if (visionSizeSpin_->value() == 224 &&
         roughlyEqual(temporalSmoothSpin_->value(), 0.16) &&
         roughlyEqual(lowerResSpin_->value(), 0.35)) {
       mode = "fast";
-    } else if (modelSizeSpin_->value() == 512 &&
+    } else if (visionSizeSpin_->value() == 512 &&
                roughlyEqual(temporalSmoothSpin_->value(), 0.25) &&
                roughlyEqual(lowerResSpin_->value(), 0.50)) {
       mode = "balanced";
-    } else if (modelSizeSpin_->value() == 640 &&
+    } else if (visionSizeSpin_->value() == 640 &&
                roughlyEqual(temporalSmoothSpin_->value(), 0.35) &&
                roughlyEqual(lowerResSpin_->value(), 0.75)) {
       mode = "high";
@@ -493,7 +464,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             }
             applyQualityPreset(mode);
           });
-  connect(modelSizeSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+  connect(visionSizeSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
           [syncQualityModeFromControls](int) { syncQualityModeFromControls(); });
   connect(temporalSmoothSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
           this, [syncQualityModeFromControls](double) {
@@ -910,7 +881,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   const auto syncCustomQualityControls = [=]() {
     const bool custom =
         qualityModeCombo_->currentData().toString() == QLatin1String("custom");
-    personForm->setRowVisible(modelSizeRow, custom);
+    personForm->setRowVisible(visionSizeRow, custom);
     personForm->setRowVisible(stabilizationRow, custom);
     perfForm->setRowVisible(lowerResRow, custom);
   };
@@ -981,9 +952,7 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
             colorHueTolSpin_->setValue(defaults.colorHueTol);
             colorSatTolSpin_->setValue(defaults.colorSatTol);
             colorValTolSpin_->setValue(defaults.colorValTol);
-            modelPathEdit_->setText(
-                QString::fromStdString(defaults.modelPath));
-            modelSizeSpin_->setValue(defaults.modelSize);
+            visionSizeSpin_->setValue(defaults.visionSize);
             { const int idx = qualityModeCombo_->findData(QString::fromStdString(defaults.qualityMode)); if (idx >= 0) qualityModeCombo_->setCurrentIndex(idx); }
             temporalSmoothSpin_->setValue(
                 static_cast<double>(defaults.temporalSmooth));
@@ -1013,8 +982,6 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
              pickedHue_ = pickedSat_ = pickedVal_ = 0;
              updateSwatchDisplay(false);
              debugGridCheck_->setChecked(defaults.debugGrid);
-             modelPathEdit_->setCursorPosition(
-                 modelPathEdit_->text().size());
              syncModeGroups();
            });
 
@@ -1024,7 +991,6 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
 
 AppSettings SettingsDialog::settings() const {
   AppSettings s;
-  s.modelPath = modelPathEdit_->text().toStdString();
   s.nthreads = nthreadsSpin_->value();
   s.automaticThreads = automaticThreadsCheck_->isChecked();
 #ifdef __APPLE__
@@ -1041,7 +1007,7 @@ AppSettings SettingsDialog::settings() const {
   s.colorHueTol = colorHueTolSpin_->value();
   s.colorSatTol = colorSatTolSpin_->value();
   s.colorValTol = colorValTolSpin_->value();
-  s.modelSize = modelSizeSpin_->value();
+  s.visionSize = visionSizeSpin_->value();
   s.qualityMode = qualityModeCombo_->currentData().toString().toStdString();
   s.strength = static_cast<float>(strengthSpin_->value());
   s.softening = static_cast<float>(softeningSpin_->value());
@@ -1118,16 +1084,6 @@ void SettingsDialog::openColorPicker() {
   colorPickRequested_ = true;
 
   updateSwatchDisplay(true);
-}
-
-void SettingsDialog::browseModelPath() {
-  const QString path = QFileDialog::getOpenFileName(
-      this, "Select Segmentation Model",
-      modelPathEdit_->text(), "TorchScript models (*.pt *.pth);;All files (*)");
-  if (!path.isEmpty()) {
-    modelPathEdit_->setText(path);
-    modelPathEdit_->setCursorPosition(modelPathEdit_->text().size());
-  }
 }
 
 #ifdef __APPLE__

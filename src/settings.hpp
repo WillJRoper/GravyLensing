@@ -67,8 +67,7 @@ struct AppSettings {
   int colorValTol = 80;     // ± tolerance around target value (0-255)
 
   // ── Person detection ───────────────────────────────────────────────
-  std::string modelPath = "models/lraspp_torchscript-traced_float32_512_512.pt";
-  int modelSize = 512;          // Segmentation model input size (px)
+  int visionSize = 512;         // Vision request size (px)
   float temporalSmooth = 0.25f; // Frame blending factor (0–1)
   int personSensitivity = 50;   // Detection sensitivity (0 strict, 100 sensitive)
   std::string qualityMode = "balanced"; // fast, balanced, high, custom
@@ -91,7 +90,7 @@ struct AppSettings {
            strength == other.strength &&
            softening == other.softening && deviceIndex == other.deviceIndex &&
            fps == other.fps && debugGrid == other.debugGrid && padFactor == other.padFactor &&
-           modelSize == other.modelSize &&
+           visionSize == other.visionSize &&
            temporalSmooth == other.temporalSmooth &&
            personSensitivity == other.personSensitivity &&
            qualityMode == other.qualityMode &&
@@ -103,8 +102,7 @@ struct AppSettings {
            colorHueTol == other.colorHueTol &&
            colorSatTol == other.colorSatTol &&
            colorValTol == other.colorValTol &&
-           backgroundsDir == other.backgroundsDir &&
-           modelPath == other.modelPath;
+           backgroundsDir == other.backgroundsDir;
   }
 
   /// Load from persistent storage, keeping current values as fallbacks.
@@ -120,7 +118,7 @@ struct AppSettings {
     fps = s.value("fps", fps).toInt();
     debugGrid = s.value("debugGrid", debugGrid).toBool();
     padFactor = s.value("padFactor", padFactor).toInt();
-    modelSize = s.value("modelSize", modelSize).toInt();
+    visionSize = s.value("visionSize", visionSize).toInt();
     temporalSmooth = s.value("temporalSmooth", temporalSmooth).toFloat();
     personSensitivity =
         s.value("personSensitivity", personSensitivity).toInt();
@@ -144,8 +142,6 @@ struct AppSettings {
         s.value("backgroundsDir", QString::fromStdString(backgroundsDir))
             .toString()
             .toStdString();
-    modelPath =
-        s.value("modelPath", QString::fromStdString(modelPath)).toString().toStdString();
   }
 
   /// Write all fields to persistent storage.
@@ -158,7 +154,7 @@ struct AppSettings {
     s.setValue("fps", fps);
     s.setValue("debugGrid", debugGrid);
     s.setValue("padFactor", padFactor);
-    s.setValue("modelSize", modelSize);
+    s.setValue("visionSize", visionSize);
     s.setValue("temporalSmooth", temporalSmooth);
     s.setValue("personSensitivity", personSensitivity);
     s.setValue("qualityMode", QString::fromStdString(qualityMode));
@@ -173,21 +169,20 @@ struct AppSettings {
     s.setValue("colorSatTol", colorSatTol);
     s.setValue("colorValTol", colorValTol);
     s.setValue("backgroundsDir", QString::fromStdString(backgroundsDir));
-    s.setValue("modelPath", QString::fromStdString(modelPath));
   }
 
   AppSettings withQualityModeApplied() const {
     AppSettings tuned = *this;
     if (qualityMode == "fast") {
-      tuned.modelSize = 224;
+      tuned.visionSize = 224;
       tuned.temporalSmooth = 0.16f;
       tuned.lowerRes = 0.35f;
     } else if (qualityMode == "high") {
-      tuned.modelSize = 640;
+      tuned.visionSize = 640;
       tuned.temporalSmooth = 0.35f;
       tuned.lowerRes = 0.75f;
     } else if (qualityMode == "balanced") {
-      tuned.modelSize = 512;
+      tuned.visionSize = 512;
       tuned.temporalSmooth = 0.25f;
       tuned.lowerRes = 0.50f;
     }

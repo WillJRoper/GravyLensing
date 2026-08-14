@@ -23,14 +23,6 @@
 
 #pragma once
 
-// Guard against the `slots` macro that PyTorch headers may leak into the
-// translation unit before this header is reached.
-#if defined(slots)
-#pragma push_macro("slots")
-#undef slots
-#define GRAVY_HAD_SLOTS_MACRO
-#endif
-
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -84,7 +76,6 @@ public:
   bool roiClearRequested() const { return roiClearRequested_; }
 
 private Q_SLOTS:
-  void browseModelPath();
   void openColorPicker();
 
 private:
@@ -95,14 +86,11 @@ private:
 #endif
 
 private:
-  QLineEdit *modelPathEdit_;
-  QPushButton *browseBtn_;
-
   QSpinBox *nthreadsSpin_;
   QCheckBox *automaticThreadsCheck_;
   QDoubleSpinBox *strengthSpin_;
   QDoubleSpinBox *softeningSpin_;
-  QSpinBox *modelSizeSpin_;
+  QSpinBox *visionSizeSpin_;
 #ifdef __APPLE__
   QComboBox *cameraCombo_;
 #else

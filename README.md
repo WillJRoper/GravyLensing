@@ -7,16 +7,14 @@ Festival Of Speed Future Lab.
 
 ## Features
 
-- **Live camera input**: Captures webcam feed in real time (native AVFoundation on
-  macOS, OpenCV `VideoCapture` on Linux).
+- **Live camera input**: Captures webcam feed through native AVFoundation.
 - **Metal GPU acceleration** (macOS only): Offloads colour-key thresholding and
   lens-map construction to the GPU.
 - **Fixed Color Key mode**: Chroma-key style HSV masking against a user-selected
   target colour.
 - **Tracked Color Blob mode** (advanced): Connected-component blob tracking for
   selective single-object masking.
-- **Person segmentation mode**: Uses native Vision on macOS and TorchScript
-  models (LR-ASPP or DeepLabV3) on Linux.
+- **Person segmentation mode**: Uses native Apple Vision with no external model.
 - **FFT-based lensing**: Applies gravitational deflection to background images
   based on the generated mask.
 - **Multi-threaded**: OpenMP and threaded FFTW3 plans keep all pipeline stages
@@ -37,9 +35,6 @@ Festival Of Speed Future Lab.
   `fftw3f_threads`)
 - **OpenCV** ≥ 4
 - **Qt6** — `Core`, `Gui`, `Widgets`
-- **libtorch** — PyTorch C++ API (≥ 2.0, Linux only)
-- **Python 3.8+** — only for the optional model-generation script and the
-  standalone Python example
 
 macOS additionally links these system frameworks (no manual install needed):
 
@@ -76,28 +71,7 @@ brew install cmake fftw libomp opencv qt
 
 `libomp` is required because AppleClang does not ship OpenMP by default.
 
-##### Linux (Ubuntu/Debian)
-
-```bash
-sudo apt update
-sudo apt install cmake build-essential libfftw3-dev libfftw3-single3 \
-  libopencv-dev qt6-base-dev python3 python3-venv python3-pip
-```
-
-##### libtorch (Linux only)
-
-Download libtorch from [pytorch.org](https://pytorch.org/). Pass its path as
-`CMAKE_PREFIX_PATH` during configuration.
-
 ## Build
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="/path/to/libtorch"
-cmake --build build --config Release
-```
-
-On macOS:
 
 ```bash
 cmake -B build \
@@ -108,8 +82,7 @@ cmake --build build --config Release
 
 If FFTW3 is installed in a non-standard location, add `-DFFTW3_ROOT=/path/to/fftw3`.
 
-On macOS, CMake creates `build/GravyLensing.app`. On Linux, the executable
-`gravy_lens` is placed in the project root.
+CMake creates `build/GravyLensing.app`.
 
 ### Build options
 
@@ -117,25 +90,6 @@ On macOS, CMake creates `build/GravyLensing.app`. On Linux, the executable
 |------|---------|-------------|
 | `-DENABLE_PROFILING=ON` | OFF | Periodic `[Perf]` log lines showing average ms and fps per pipeline stage |
 | `-DBUILD_TESTS=OFF` | ON | Skip building the unit-test binary |
-
-## Segmentation models
-
-Linux builds use the default model at
-`models/lraspp_torchscript-traced_float32_512_512.pt`, which is what the app
-uses for fresh Linux installs in Person mode. macOS uses native Vision and does
-not require a model.
-
-The script `models/get_models.py` can generate additional models:
-
-```bash
-pip install torch torchvision
-python models/get_models.py --model lraspp --format quantized
-```
-
-Supported backbones: `deeplab`, `lraspp`.  
-Supported formats: `torchscript-scripted`, `torchscript-traced`, `quantized`, `onnx`.
-
-See `models/README` for the models already included.
 
 ## Usage
 
@@ -162,13 +116,12 @@ Options:
   -n, --nthreads <n>              Override automatic CPU thread allocation.
   -s, --strength <f>              Lens strength multiplier (default 4.0).
   -f, --softening <f>             Kernel softening radius in px (default 50.0).
-  -m, --modelSize <n>             Segmentation model input size (default 512).
+  -m, --visionSize <n>            Vision request size (default 512).
   -d, --deviceIndex <n>           Camera device index (default 0).
   --fps, --frameRate <n>           Target camera frame rate (default 30).
   -g, --debugGrid                 Show 2×2 diagnostic grid at start.
   --no-debugGrid                  Force the debug grid off.
   -p, --padFactor <n>             FFT padding multiplier (default 2).
-  --mp, --modelPath <path>        TorchScript model path (Linux only).
   -t, --temporalSmooth <f>        Mask temporal blending factor (default 0.25).
   --personSensitivity <n>         Person sensitivity, 0–100 (default 50).
   --lr, --lowerRes <f>            Resolution scale for lensing, 0.1–1.0 (default 0.5).
@@ -201,8 +154,7 @@ Choose **Person** mode and click **Start Session**.
 
 ### Mask modes
 
-**Person (AI segmentation)** — native Vision on macOS; TorchScript acceleration
-where available on Linux.
+**Person detection** — native Apple Vision person segmentation.
 
 **Color tracking** with two sub-modes:
 
@@ -219,7 +171,7 @@ In Color mode:
 - Click the target object in the OpenCV picker window, or press `Esc`/`c` to
   cancel.
 - The measured HSV spread is used as the starting tolerance range.
-- Colour mode does not require a segmentation model.
+- Colour mode runs independently of person detection.
 
 ### During a session
 
@@ -248,18 +200,6 @@ switches back to the packaged backgrounds.
 3. Click **Restart Session**.
 
 The current colour target and ROI are preserved across restarts where possible.
-
-## Python example
-
-`python_example.py` is a standalone Python demo with the same pipeline, but
-without the performance of the C++ version.
-
-```bash
-pip install torch torchvision opencv-python numpy
-python python_example.py
-```
-
-It loads a background from `backgrounds/` automatically.
 
 ## Contributing
 

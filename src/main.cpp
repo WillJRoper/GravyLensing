@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
   appSettings.fps = opts.fps;
   appSettings.debugGrid = opts.debugGrid;
   appSettings.padFactor = opts.padFactor;
-  appSettings.modelSize = opts.modelSize;
+  appSettings.visionSize = opts.visionSize;
   appSettings.temporalSmooth = opts.temporalSmooth;
   appSettings.personSensitivity = opts.personSensitivity;
   appSettings.lowerRes = opts.lowerRes;
@@ -216,7 +216,6 @@ int main(int argc, char **argv) {
   appSettings.selectROI = opts.selectROI;
   appSettings.maskMode = opts.maskMode;
   appSettings.colorModeType = opts.colorModeType;
-  appSettings.modelPath = opts.modelPath;
 
   SessionSelections sessionSelections;
   const auto loadSessionSelections = [&](QSettings &settings) {
@@ -269,9 +268,6 @@ int main(int argc, char **argv) {
   QTimer *bgTimer = nullptr;
   QMetaObject::Connection frameToSegConnection;
   QMetaObject::Connection frameToColorConnection;
-#ifdef __APPLE__
-  QMetaObject::Connection frameToAppleSegConnection;
-#endif
   bool personModeAvailable = false;
   ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
   std::function<void(ActiveMaskMode)> setActiveMaskMode;
@@ -309,7 +305,7 @@ int main(int argc, char **argv) {
     //    This is safe because frame→worker connections are DirectConnection
     //    and the remaining steps gate work before teardown continues.
     // 2. disconnect signals – prevents any *future* camera-thread
-    //    invocations of submitFrame / submitAppleFrame reaching the
+    //    invocations of submitAppleFrame reaching the
     //    segmentation worker after this point.
     // 3. beginShutdown (BlockingQueuedConnection) – blocks the main
     //    thread until the mask thread has set shuttingDown_ and cleared
@@ -329,10 +325,6 @@ int main(int argc, char **argv) {
       QObject::disconnect(frameToSegConnection);
     if (frameToColorConnection)
       QObject::disconnect(frameToColorConnection);
-#ifdef __APPLE__
-    if (frameToAppleSegConnection)
-      QObject::disconnect(frameToAppleSegConnection);
-#endif
 
     if (segWorker != nullptr) {
       QMetaObject::invokeMethod(segWorker, &SegmentationWorker::beginShutdown,
@@ -379,9 +371,6 @@ int main(int argc, char **argv) {
     personModeAvailable = false;
     frameToSegConnection = QMetaObject::Connection();
     frameToColorConnection = QMetaObject::Connection();
-#ifdef __APPLE__
-    frameToAppleSegConnection = QMetaObject::Connection();
-#endif
     updatePreviewPolicy = nullptr;
   };
 
@@ -410,18 +399,15 @@ int main(int argc, char **argv) {
       return personModeAvailable;
     }
 
-    const int nfftThreads = std::max(1, activeSettings.nthreads - 3);
     const AppSettings effectiveSettings = activeSettings.withQualityModeApplied();
     SegmentationWorker *newSegWorker =
-        new SegmentationWorker(effectiveSettings.modelPath,
-                               effectiveSettings.modelSize, nfftThreads,
-                                effectiveSettings.temporalSmooth,
-                                effectiveSettings.lowerRes,
-                                effectiveSettings.visionQualityMode(),
-                                effectiveSettings.personSensitivity);
-    if (!newSegWorker->isModelLoaded()) {
-      reportError("Failed to load segmentation model from " +
-                  activeSettings.modelPath);
+        new SegmentationWorker(effectiveSettings.visionSize,
+                               effectiveSettings.temporalSmooth,
+                               effectiveSettings.lowerRes,
+                               effectiveSettings.visionQualityMode(),
+                               effectiveSettings.personSensitivity);
+    if (!newSegWorker->isReady()) {
+      reportError("Apple Vision person segmentation is unavailable");
       delete newSegWorker;
       return false;
     }
@@ -459,17 +445,13 @@ int main(int argc, char **argv) {
     SegmentationWorker *newSegWorker = nullptr;
     bool newPersonModeAvailable = false;
     if (settings.maskMode == "person") {
-      newSegWorker = new SegmentationWorker(effectiveSettings.modelPath,
-                                            effectiveSettings.modelSize,
-                                            nfftThreads,
-                                             effectiveSettings.temporalSmooth,
-                                             effectiveSettings.lowerRes,
-                                             effectiveSettings.visionQualityMode(),
-                                             effectiveSettings.personSensitivity);
-      newPersonModeAvailable = newSegWorker->isModelLoaded();
+      newSegWorker = new SegmentationWorker(
+          effectiveSettings.visionSize, effectiveSettings.temporalSmooth,
+          effectiveSettings.lowerRes, effectiveSettings.visionQualityMode(),
+          effectiveSettings.personSensitivity);
+      newPersonModeAvailable = newSegWorker->isReady();
       if (!newPersonModeAvailable) {
-        reportError("Failed to load segmentation model from " +
-                    settings.modelPath);
+        reportError("Apple Vision person segmentation is unavailable");
         delete newSegWorker;
         delete newCamFeed;
         return false;
@@ -635,13 +617,12 @@ int main(int argc, char **argv) {
     personModeAvailable = newPersonModeAvailable;
 
     updatePreviewPolicy = [&]() {
-#ifdef __APPLE__
       if (camFeed == nullptr) {
         return;
       }
       const bool useNativeOnlyPersonPath =
           activeMaskMode == ActiveMaskMode::Person && segWorker != nullptr &&
-          segWorker->usesAppleVision() && !activeSettings.debugGrid;
+          !activeSettings.debugGrid;
       QMetaObject::invokeMethod(
           camFeed,
           [camFeed, enablePreview = !useNativeOnlyPersonPath]() {
@@ -650,7 +631,6 @@ int main(int argc, char **argv) {
             }
           },
           Qt::QueuedConnection);
-#endif
     };
 
     setActiveMaskMode = [&](ActiveMaskMode mode) {
@@ -666,33 +646,15 @@ int main(int argc, char **argv) {
         QObject::disconnect(frameToSegConnection);
       if (frameToColorConnection)
         QObject::disconnect(frameToColorConnection);
-#ifdef __APPLE__
-      if (frameToAppleSegConnection)
-        QObject::disconnect(frameToAppleSegConnection);
-#endif
 
       if (enablePerson && segWorker != nullptr) {
-#ifdef __APPLE__
-        if (segWorker->usesAppleVision()) {
-          frameToAppleSegConnection = QObject::connect(
-              camFeed, &CameraFeed::framePairCaptured, segWorker,
-              [segWorker](const cv::Mat &frame,
-                          const AppleVideoFrame &nativeFrame) {
-                segWorker->submitAppleFrame(nativeFrame, frame);
-              },
-              Qt::DirectConnection);
-        } else {
-          frameToSegConnection = QObject::connect(
-              camFeed, &CameraFeed::frameCaptured, segWorker,
-              [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
-              Qt::DirectConnection);
-        }
-#else
         frameToSegConnection = QObject::connect(
-            camFeed, &CameraFeed::frameCaptured, segWorker,
-            [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
+            camFeed, &CameraFeed::framePairCaptured, segWorker,
+            [segWorker](const cv::Mat &frame,
+                        const AppleVideoFrame &nativeFrame) {
+              segWorker->submitAppleFrame(nativeFrame, frame);
+            },
             Qt::DirectConnection);
-#endif
       }
       if (enableColor) {
         frameToColorConnection = QObject::connect(
