@@ -100,13 +100,15 @@ public:
   }
 
 signals:
-  /// Emitted as soon as a new frame is ready
-  void frameCaptured(const cv::Mat &frame);
+  /// Emitted as soon as a new frame is ready.  seq identifies the capture so
+  /// downstream stages can align masks/lensed frames with the exact camera
+  /// frame they were derived from.
+  void frameCaptured(const cv::Mat &frame, quint64 seq);
 
 #ifdef __APPLE__
   void nativeFrameCaptured(const AppleVideoFrame &frame);
   void framePairCaptured(const cv::Mat &frame,
-                         const AppleVideoFrame &nativeFrame);
+                         const AppleVideoFrame &nativeFrame, quint64 seq);
 #endif
 
   /// Emitted if there's an error opening or reading the camera

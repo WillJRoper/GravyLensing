@@ -351,6 +351,9 @@ void ViewPort::setBackgroundCycleState(int seconds) {
 
 void ViewPort::setShowLensContentsEnabled(bool enabled) {
   showLensContents_ = enabled;
+  if (!enabled) {
+    cameraFrames_.clear();
+  }
   if (showLensContentsAction_) {
     QSignalBlocker blocker(showLensContentsAction_);
     showLensContentsAction_->setChecked(enabled);
@@ -362,24 +365,35 @@ void ViewPort::setShowLensContentsEnabled(bool enabled) {
 //  Image display
 // ─────────────────────────────────────────────────────────────────────────────
 
-void ViewPort::setImage(const cv::Mat &image) {
+void ViewPort::setImage(const cv::Mat &image, quint64 seq) {
   static PerfLog perf("ui-image", 120);
   const auto t0 = std::chrono::steady_clock::now();
   image_ = image;
-  imageLabel_->setPixmap(QPixmap::fromImage(MatToQImage(image_)));
+  if (showLensContents_ && seq != 0) {
+    cameraFrames_.emplace_back(seq, image);
+    while (cameraFrames_.size() > kCameraFrameBuffer) {
+      cameraFrames_.pop_front();
+    }
+  }
+  if (imageLabel_->isVisible()) {
+    imageLabel_->setPixmap(QPixmap::fromImage(MatToQImage(image_)));
+  }
   const auto t1 = std::chrono::steady_clock::now();
   perf.addSample(std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
 
 void ViewPort::setBackground(const cv::Mat &background) {
   background_ = background;
-  backgroundLabel_->setPixmap(QPixmap::fromImage(MatToQImage(background_)));
+  if (backgroundLabel_->isVisible()) {
+    backgroundLabel_->setPixmap(QPixmap::fromImage(MatToQImage(background_)));
+  }
 }
 
-void ViewPort::setLens(const cv::Mat &lens) {
+void ViewPort::setLens(const cv::Mat &lens, quint64 seq) {
   static PerfLog perf("ui-lens", 120);
   const auto t0 = std::chrono::steady_clock::now();
   lens_ = lens;
+  lensSeq_ = seq;
   updateLensDisplay();
   const auto t1 = std::chrono::steady_clock::now();
   perf.addSample(std::chrono::duration<double, std::milli>(t1 - t0).count());
@@ -393,13 +407,29 @@ void ViewPort::updateLensDisplay() {
     return;
   }
 
-  const cv::Mat composite = compositeMaskedForeground(lens_, image_, mask_);
+  // Pick the camera frame the mask/lens was actually derived from (or the
+  // nearest older one still buffered) so the composited camera content is
+  // spatially aligned with the mask instead of lagging behind it.
+  const cv::Mat *camFrame = &image_;
+  if (lensSeq_ != 0 && !cameraFrames_.empty()) {
+    camFrame = &cameraFrames_.front().second; // oldest — fallback
+    for (auto it = cameraFrames_.rbegin(); it != cameraFrames_.rend(); ++it) {
+      if (it->first <= lensSeq_) {
+        camFrame = &it->second;
+        break;
+      }
+    }
+  }
+
+  const cv::Mat composite = compositeMaskedForeground(lens_, *camFrame, mask_);
   lensLabel_->setPixmap(QPixmap::fromImage(MatToQImage(composite)));
 }
 
 void ViewPort::setMask(const cv::Mat &mask) {
   mask_ = mask;
-  maskLabel_->setPixmap(QPixmap::fromImage(MatToQImage(mask_)));
+  if (maskLabel_->isVisible()) {
+    maskLabel_->setPixmap(QPixmap::fromImage(MatToQImage(mask_)));
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

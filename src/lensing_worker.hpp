@@ -52,13 +52,14 @@ public:
   // Destructor
   ~LensingWorker();
 
-  // Thread-safe mask submission that coalesces stale work.
-  void submitMask(const cv::Mat &mask);
+  // Thread-safe mask submission that coalesces stale work.  seq identifies
+  // the camera frame the mask was derived from (0 = untracked).
+  void submitMask(const cv::Mat &mask, quint64 seq = 0);
 
 public Q_SLOTS:
 
   // Calculate a new lensing effect when there is a new mask
-  void onMask(const cv::Mat &mask);
+  void onMask(const cv::Mat &mask, quint64 seq = 0);
 
   // Update the geometry when the background changes
   void onBackgroundChange(const cv::Mat &background);
@@ -71,8 +72,9 @@ public Q_SLOTS:
 
 signals:
 
-  // Signal to indicate that lensing is ready
-  void lensedReady(const cv::Mat &lensedImage);
+  // Signal to indicate that lensing is ready.  seq matches the camera frame
+  // the mask was derived from (0 = untracked).
+  void lensedReady(const cv::Mat &lensedImage, quint64 seq);
 
   // Signal to indicate that lensing is ready with a mask
   void lensingError(const std::string &error);
@@ -161,5 +163,6 @@ private:
 
   std::mutex pendingMaskMutex_;
   cv::Mat pendingMask_;
+  quint64 pendingMaskSeq_ = 0;
   bool pendingMaskDrainScheduled_ = false;
 };

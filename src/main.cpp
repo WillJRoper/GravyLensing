@@ -432,9 +432,9 @@ int main(int argc, char **argv) {
     }
 
     QObject::connect(worker, &SegmentationWorker::maskReady, lensWorker,
-                     [lensWorker](const cv::Mat &mask) {
+                     [lensWorker](const cv::Mat &mask, quint64 seq) {
                        if (lensWorker)
-                         lensWorker->submitMask(mask);
+                         lensWorker->submitMask(mask, seq);
                      },
                      Qt::DirectConnection);
     QObject::connect(backgrounds, &Backgrounds::backgroundChanged, worker,
@@ -589,8 +589,9 @@ int main(int argc, char **argv) {
 
     if (newSegWorker != nullptr) {
       QObject::connect(newSegWorker, &SegmentationWorker::maskReady,
-                       newLensWorker, [newLensWorker](const cv::Mat &mask) {
-                         newLensWorker->submitMask(mask);
+                       newLensWorker,
+                       [newLensWorker](const cv::Mat &mask, quint64 seq) {
+                         newLensWorker->submitMask(mask, seq);
                        },
                        Qt::DirectConnection);
       QObject::connect(backgrounds, &Backgrounds::backgroundChanged,
@@ -719,8 +720,8 @@ int main(int argc, char **argv) {
         frameToSegConnection = QObject::connect(
             camFeed, &CameraFeed::framePairCaptured, segWorker,
             [segWorker](const cv::Mat &frame,
-                        const AppleVideoFrame &nativeFrame) {
-              segWorker->submitAppleFrame(nativeFrame, frame);
+                        const AppleVideoFrame &nativeFrame, quint64 seq) {
+              segWorker->submitAppleFrame(nativeFrame, frame, seq);
             },
             Qt::DirectConnection);
       }

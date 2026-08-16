@@ -257,7 +257,7 @@ LensingWorker::LensingWorker(float strength, float softening, int padFactor,
   std::cout << "[LensingWorker] Mass blur sigma: " << massBlurSigma_ << "\n";
 }
 
-void LensingWorker::submitMask(const cv::Mat &mask) {
+void LensingWorker::submitMask(const cv::Mat &mask, quint64 seq) {
   if (mask.empty()) {
     return;
   }
@@ -266,6 +266,7 @@ void LensingWorker::submitMask(const cv::Mat &mask) {
   {
     std::lock_guard<std::mutex> lock(pendingMaskMutex_);
     pendingMask_ = mask;
+    pendingMaskSeq_ = seq;
     if (!pendingMaskDrainScheduled_) {
       pendingMaskDrainScheduled_ = true;
       shouldSchedule = true;
@@ -280,6 +281,7 @@ void LensingWorker::submitMask(const cv::Mat &mask) {
 
 void LensingWorker::drainPendingMask() {
   cv::Mat mask;
+  quint64 seq = 0;
   {
     std::lock_guard<std::mutex> lock(pendingMaskMutex_);
     if (pendingMask_.empty()) {
@@ -287,10 +289,11 @@ void LensingWorker::drainPendingMask() {
       return;
     }
     mask = std::move(pendingMask_);
+    seq = pendingMaskSeq_;
     pendingMask_.release();
   }
 
-  onMask(mask);
+  onMask(mask, seq);
 
   bool shouldContinue = false;
   {
@@ -722,7 +725,7 @@ void LensingWorker::onBackgroundChange(const cv::Mat &background) {
  *
  * @param mask The new mask image.
  */
-void LensingWorker::onMask(const cv::Mat &mask) {
+void LensingWorker::onMask(const cv::Mat &mask, quint64 seq) {
   static thread_local PerfLog perf("lensing", 60);
   static thread_local PerfLog perfApply("lensing-apply", 60);
 
@@ -748,7 +751,7 @@ void LensingWorker::onMask(const cv::Mat &mask) {
     }
 
     // Emit the lensed image
-    emit lensedReady(upsampledLensed_.clone());
+    emit lensedReady(upsampledLensed_.clone(), seq);
 
     const auto t1 = std::chrono::steady_clock::now();
     perf.addSample(

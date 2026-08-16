@@ -312,12 +312,9 @@ SegmentationWorker::SegmentationWorker(int visionSize,
 
 SegmentationWorker::~SegmentationWorker() = default;
 
-void SegmentationWorker::submitAppleFrame(const AppleVideoFrame &frame) {
-  submitAppleFrame(frame, cv::Mat());
-}
-
 void SegmentationWorker::submitAppleFrame(const AppleVideoFrame &frame,
-                                          const cv::Mat &guidanceFrame) {
+                                          const cv::Mat &guidanceFrame,
+                                          quint64 seq) {
   if (!frame.isValid() || shuttingDown_) {
     return;
   }
@@ -326,7 +323,11 @@ void SegmentationWorker::submitAppleFrame(const AppleVideoFrame &frame,
   {
     std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
     pendingAppleFrame_ = frame;
-    pendingAppleGuidanceFrame_ = guidanceFrame.clone();
+    // Shallow copy only: cv::Mat is refcounted and the camera produces a
+    // fresh buffer per frame, so the full clone only happens if this frame
+    // is actually drained (most submissions are coalesced away).
+    pendingAppleGuidanceFrame_ = guidanceFrame;
+    pendingAppleSeq_ = seq;
     if (!pendingAppleFrameDrainScheduled_) {
       pendingAppleFrameDrainScheduled_ = true;
       shouldSchedule = true;
@@ -349,6 +350,7 @@ void SegmentationWorker::drainPendingAppleFrame() {
 
   AppleVideoFrame frame;
   cv::Mat guidanceFrame;
+  quint64 seq = 0;
   {
     std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
     if (!pendingAppleFrame_.isValid()) {
@@ -356,7 +358,11 @@ void SegmentationWorker::drainPendingAppleFrame() {
       return;
     }
     frame = pendingAppleFrame_;
-    guidanceFrame = std::move(pendingAppleGuidanceFrame_);
+    // Fast mode never uses the guidance frame — skip the full-res clone.
+    if (qualityMode_ != "fast") {
+      guidanceFrame = pendingAppleGuidanceFrame_.clone();
+    }
+    seq = pendingAppleSeq_;
     pendingAppleFrame_ = AppleVideoFrame();
     pendingAppleGuidanceFrame_.release();
   }
@@ -375,7 +381,7 @@ void SegmentationWorker::drainPendingAppleFrame() {
   try {
     const auto t0 = std::chrono::steady_clock::now();
     if (detectPersonMask(frame, guidanceFrame)) {
-      emit maskReady(latestMask_.clone());
+      emit maskReady(latestMask_.clone(), seq);
     }
     const auto t1 = std::chrono::steady_clock::now();
     perf.addSample(elapsedMs(t0, t1));

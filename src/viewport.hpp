@@ -25,6 +25,10 @@
 
 #pragma once
 
+// Standard includes
+#include <deque>
+#include <utility>
+
 // Qt includes
 #include <qtwidgets/QLabel>
 #include <qtwidgets/QMainWindow>
@@ -82,9 +86,10 @@ public Q_SLOTS:
   void setShowLensContentsEnabled(bool enabled);
 
   // Image data slots — called from worker threads via Qt::QueuedConnection.
-  void setImage(const cv::Mat &image);
+  // seq identifies the camera frame the data derives from (0 = untracked).
+  void setImage(const cv::Mat &image, quint64 seq);
   void setBackground(const cv::Mat &background);
-  void setLens(const cv::Mat &lens);
+  void setLens(const cv::Mat &lens, quint64 seq);
   void setMask(const cv::Mat &mask);
 
 signals:
@@ -116,6 +121,12 @@ private:
   cv::Mat background_;
   cv::Mat lens_;
   cv::Mat mask_;
+
+  // Ring buffer of recent camera frames (newest last), used to composite the
+  // camera frame that matches the frame the mask/lens was derived from.
+  static constexpr size_t kCameraFrameBuffer = 10;
+  std::deque<std::pair<quint64, cv::Mat>> cameraFrames_;
+  quint64 lensSeq_ = 0;
 
   Backgrounds *backgrounds_{nullptr};
   AppSettings settings_;

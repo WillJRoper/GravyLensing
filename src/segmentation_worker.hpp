@@ -55,10 +55,11 @@ public:
 
   bool isReady() const { return ready_; }
 
-  // Thread-safe frame submission that coalesces stale work.
-  void submitAppleFrame(const AppleVideoFrame &frame);
+  // Thread-safe frame submission that coalesces stale work.  seq identifies
+  // the captured frame and is carried through to maskReady so consumers can
+  // align the mask with the exact camera frame it came from.
   void submitAppleFrame(const AppleVideoFrame &frame,
-                        const cv::Mat &guidanceFrame);
+                        const cv::Mat &guidanceFrame, quint64 seq);
 
   // Whether this worker should process incoming frames.
   bool isEnabled() const { return enabled_; }
@@ -78,8 +79,9 @@ public Q_SLOTS:
 
 signals:
 
-  // Signal to emit when the mask is ready
-  void maskReady(const cv::Mat &mask);
+  // Signal to emit when the mask is ready.  seq matches the camera frame the
+  // mask was derived from.
+  void maskReady(const cv::Mat &mask, quint64 seq);
 
   // Signal to emit when there is an error in the segmentation
   void segmentationError(const std::string &error);
@@ -168,5 +170,6 @@ private:
   std::mutex pendingAppleFrameMutex_;
   AppleVideoFrame pendingAppleFrame_;
   cv::Mat pendingAppleGuidanceFrame_;
+  quint64 pendingAppleSeq_ = 0;
   bool pendingAppleFrameDrainScheduled_ = false;
 };

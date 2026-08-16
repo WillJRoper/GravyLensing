@@ -365,6 +365,7 @@ void CameraFeed::startCaptureLoop() {
 
   // Define a local reusable header for the frame
   cv::Mat frame;
+  quint64 frameSeq = 0;
 #ifdef __APPLE__
   AppleVideoFrame nativeFrame;
 #endif
@@ -399,6 +400,8 @@ void CameraFeed::startCaptureLoop() {
       cv::flip(frame, frame, 1);
     }
 
+    ++frameSeq;
+
     // Apply ROI mask, crop to ROI and emit if we are doing ROI selection,
     // otherwise just emit the full frame
     if (doingROI_.load()) {
@@ -410,15 +413,15 @@ void CameraFeed::startCaptureLoop() {
         mask = roiMask_;
       }
       emit frameCaptured(
-          applyROIMaskAndCrop(frame, mask, rect).clone());
+          applyROIMaskAndCrop(frame, mask, rect).clone(), frameSeq);
     } else {
       if (!frame.empty()) {
-        emit frameCaptured(frame.clone());
+        emit frameCaptured(frame.clone(), frameSeq);
       }
 #ifdef __APPLE__
       AppleVideoFrame emittedNativeFrame(nativeFrame.pixelBuffer, flip_);
       emit nativeFrameCaptured(emittedNativeFrame);
-      emit framePairCaptured(frame, emittedNativeFrame);
+      emit framePairCaptured(frame, emittedNativeFrame, frameSeq);
 #endif
     }
 
