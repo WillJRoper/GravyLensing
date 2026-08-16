@@ -24,8 +24,11 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 #include <QRect>
 
@@ -62,7 +65,7 @@ public:
                         const cv::Mat &guidanceFrame, quint64 seq);
 
   // Whether this worker should process incoming frames.
-  bool isEnabled() const { return enabled_; }
+  bool isEnabled() const { return enabled_.load(); }
 
   // ===================== Qt Slots ==================
 
@@ -153,23 +156,53 @@ private:
   bool ready_ = false;
 
   // Whether this worker should process frames.
-  bool enabled_ = false;
+  std::atomic<bool> enabled_{false};
   std::atomic<bool> shuttingDown_{false};
 
   // ================== Member Function Prototypes ==================
-
-  bool detectPersonMask(const AppleVideoFrame &frame,
-                        const cv::Mat &guidanceFrame);
 
   void setupVision();
 
   // Update the geometry when the background changes
   void updateGeometry(int width, int height);
-  void drainPendingAppleFrame();
 
-  std::mutex pendingAppleFrameMutex_;
-  AppleVideoFrame pendingAppleFrame_;
-  cv::Mat pendingAppleGuidanceFrame_;
-  quint64 pendingAppleSeq_ = 0;
-  bool pendingAppleFrameDrainScheduled_ = false;
+  // Vision inference runs on a dedicated thread so the temporal/refinement
+  // chain (on the worker's QThread) overlaps with the next Vision request.
+  // The inbox is latest-wins; a single inference slot keeps completions in
+  // capture order.
+  struct VisionCompletion {
+    quint64 seq = 0;
+    cv::Mat prob;
+    cv::Mat guidance; // shallow, read-only
+    cv::Rect activeROI;
+    bool usedROI = false;
+  };
+  struct VisionROISuggestion {
+    cv::Rect2f normalizedCrop;
+    cv::Rect activeROI;
+    int requestWidth = 0;
+    int requestHeight = 0;
+    bool useROI = false;
+  };
+
+  void inferenceLoop();
+  void drainCompletions();
+  void applyPersonResult(VisionCompletion &&completion);
+
+  std::thread inferenceThread_;
+  std::mutex inboxMutex_;
+  std::condition_variable inboxCv_;
+  AppleVideoFrame inboxFrame_;
+  cv::Mat inboxGuidance_;
+  quint64 inboxSeq_ = 0;
+  bool inboxValid_ = false;
+
+  std::mutex completionMutex_;
+  std::deque<VisionCompletion> completions_;
+  bool completionDrainScheduled_ = false;
+
+  std::mutex roiSuggestionMutex_;
+  VisionROISuggestion roiSuggestion_;
+
+  std::atomic<bool> inferenceStop_{false};
 };

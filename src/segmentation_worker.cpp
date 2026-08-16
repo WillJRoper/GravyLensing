@@ -307,102 +307,129 @@ SegmentationWorker::SegmentationWorker(int visionSize,
     return;
   }
 
+  inferenceThread_ = std::thread([this]() { inferenceLoop(); });
+
   std::cout << "[SegmentationWorker] Segmentation backend ready\n";
 }
 
-SegmentationWorker::~SegmentationWorker() = default;
+SegmentationWorker::~SegmentationWorker() {
+  // Safety net — beginShutdown() normally joins the thread already.
+  if (inferenceThread_.joinable()) {
+    inferenceStop_.store(true);
+    inboxCv_.notify_one();
+    inferenceThread_.join();
+  }
+}
 
 void SegmentationWorker::submitAppleFrame(const AppleVideoFrame &frame,
                                           const cv::Mat &guidanceFrame,
                                           quint64 seq) {
-  if (!frame.isValid() || shuttingDown_) {
+  if (!frame.isValid() || shuttingDown_ || !ready_ || !enabled_.load()) {
     return;
   }
 
-  bool shouldSchedule = false;
   {
-    std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
-    pendingAppleFrame_ = frame;
-    // Shallow copy only: cv::Mat is refcounted and the camera produces a
-    // fresh buffer per frame, so the full clone only happens if this frame
-    // is actually drained (most submissions are coalesced away).
-    pendingAppleGuidanceFrame_ = guidanceFrame;
-    pendingAppleSeq_ = seq;
-    if (!pendingAppleFrameDrainScheduled_) {
-      pendingAppleFrameDrainScheduled_ = true;
-      shouldSchedule = true;
-    }
+    std::lock_guard<std::mutex> lock(inboxMutex_);
+    // Latest-wins: any undelivered older frame is stale by definition.
+    // Guidance is a shallow refcounted copy — read-only downstream and the
+    // camera hands out a fresh buffer per frame, so no clone is ever needed.
+    inboxFrame_ = frame;
+    inboxGuidance_ = guidanceFrame;
+    inboxSeq_ = seq;
+    inboxValid_ = true;
   }
+  inboxCv_.notify_one();
+}
 
-  if (shouldSchedule) {
-    QMetaObject::invokeMethod(this, [this]() { drainPendingAppleFrame(); },
-                              Qt::QueuedConnection);
+void SegmentationWorker::inferenceLoop() {
+  static thread_local PerfLog perf("person-mask", 60);
+  static thread_local PerfLog visionPerf("person-mask-vision", 60);
+
+  while (!inferenceStop_.load()) {
+    AppleVideoFrame frame;
+    quint64 seq = 0;
+
+    VisionCompletion completion;
+    {
+      std::unique_lock<std::mutex> lock(inboxMutex_);
+      inboxCv_.wait(lock,
+                    [&]() { return inboxValid_ || inferenceStop_.load(); });
+      if (inferenceStop_.load()) {
+        return;
+      }
+      frame = inboxFrame_;
+      completion.guidance = inboxGuidance_;
+      seq = inboxSeq_;
+      inboxFrame_ = AppleVideoFrame();
+      inboxGuidance_.release();
+      inboxValid_ = false;
+    }
+    completion.seq = seq;
+
+    VisionROISuggestion roi;
+    {
+      std::lock_guard<std::mutex> lock(roiSuggestionMutex_);
+      roi = roiSuggestion_;
+    }
+    completion.usedROI = roi.useROI;
+    completion.activeROI = roi.activeROI;
+
+    const auto t0 = std::chrono::steady_clock::now();
+    std::string error;
+    const bool ok =
+        roi.useROI
+            ? appleSegmentationHelper_->generatePersonProbability(
+                  frame, roi.normalizedCrop, roi.requestWidth,
+                  roi.requestHeight, completion.prob, error)
+            : appleSegmentationHelper_->generatePersonProbability(
+                  frame, fastW_, fastH_, completion.prob, error);
+    const auto t1 = std::chrono::steady_clock::now();
+    visionPerf.addSample(elapsedMs(t0, t1));
+    perf.addSample(elapsedMs(t0, t1));
+
+    if (!ok) {
+      std::cerr << "[SegmentationWorker] Vision segmentation failed: " << error
+                << "\n";
+      continue;
+    }
+
+    bool shouldSchedule = false;
+    {
+      std::lock_guard<std::mutex> lock(completionMutex_);
+      completions_.push_back(std::move(completion));
+      while (completions_.size() > 2) {
+        completions_.pop_front(); // consumer is behind; oldest is stale
+      }
+      if (!completionDrainScheduled_) {
+        completionDrainScheduled_ = true;
+        shouldSchedule = true;
+      }
+    }
+    if (shouldSchedule) {
+      QMetaObject::invokeMethod(this, [this]() { drainCompletions(); },
+                                Qt::QueuedConnection);
+    }
   }
 }
-void SegmentationWorker::drainPendingAppleFrame() {
-  if (shuttingDown_) {
-    std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
-    pendingAppleFrame_ = AppleVideoFrame();
-    pendingAppleGuidanceFrame_.release();
-    pendingAppleFrameDrainScheduled_ = false;
-    return;
-  }
 
-  AppleVideoFrame frame;
-  cv::Mat guidanceFrame;
-  quint64 seq = 0;
-  {
-    std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
-    if (!pendingAppleFrame_.isValid()) {
-      pendingAppleFrameDrainScheduled_ = false;
-      return;
+void SegmentationWorker::drainCompletions() {
+  for (;;) {
+    VisionCompletion completion;
+    {
+      std::lock_guard<std::mutex> lock(completionMutex_);
+      if (completions_.empty()) {
+        completionDrainScheduled_ = false;
+        return;
+      }
+      completion = std::move(completions_.front());
+      completions_.pop_front();
     }
-    frame = pendingAppleFrame_;
-    // Fast mode never uses the guidance frame — skip the full-res clone.
-    if (qualityMode_ != "fast") {
-      guidanceFrame = pendingAppleGuidanceFrame_.clone();
+
+    try {
+      applyPersonResult(std::move(completion));
+    } catch (const std::exception &e) {
+      emit segmentationError("Segmentation error: " + std::string(e.what()));
     }
-    seq = pendingAppleSeq_;
-    pendingAppleFrame_ = AppleVideoFrame();
-    pendingAppleGuidanceFrame_.release();
-  }
-
-  static thread_local PerfLog perf("person-mask", 60);
-
-  if (!enabled_ || !ready_ || latestMask_.empty()) {
-    // If we consumed a frame but are not ready to process it we must
-    // clear the drain-scheduled flag; otherwise submitAppleFrame will
-    // never schedule the next drain and the pipeline deadlocks.
-    std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
-    pendingAppleFrameDrainScheduled_ = false;
-    return;
-  }
-
-  try {
-    const auto t0 = std::chrono::steady_clock::now();
-    if (detectPersonMask(frame, guidanceFrame)) {
-      emit maskReady(latestMask_.clone(), seq);
-    }
-    const auto t1 = std::chrono::steady_clock::now();
-    perf.addSample(elapsedMs(t0, t1));
-  } catch (const std::exception &e) {
-    emit segmentationError("Segmentation error: " + std::string(e.what()));
-    return;
-  }
-
-  bool shouldContinue = false;
-  {
-    std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
-    if (!pendingAppleFrame_.isValid()) {
-      pendingAppleFrameDrainScheduled_ = false;
-    } else {
-      shouldContinue = true;
-    }
-  }
-
-  if (shouldContinue) {
-    QMetaObject::invokeMethod(this, [this]() { drainPendingAppleFrame(); },
-                              Qt::QueuedConnection);
   }
 }
 
@@ -420,96 +447,40 @@ void SegmentationWorker::setupVision() {
   ready_ = false;
 }
 
-bool SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame,
-                                          const cv::Mat &guidanceFrame) {
-  static thread_local PerfLog visionPerf("person-mask-vision", 60);
+void SegmentationWorker::applyPersonResult(VisionCompletion &&completion) {
   static thread_local PerfLog cleanupPerf("person-mask-cleanup", 60);
   static thread_local PerfLog upscalePerf("person-mask-upscale", 60);
 
-  auto stageStart = std::chrono::steady_clock::now();
-  cv::Mat roiPersonProb;
+  if (!enabled_.load() || !ready_ || latestMask_.empty()) {
+    return;
+  }
+
+  const auto stageStart = std::chrono::steady_clock::now();
   cv::Mat newPersonProb;
   if (havePrevProb_) {
     newPersonProb = prevPersonProb_.clone();
   } else {
     newPersonProb = cv::Mat::zeros(fastH_, fastW_, CV_32F);
   }
-  std::string error;
-  const bool enableVisionROIAcceleration =
-      qualityMode_ == "fast" || qualityMode_ == "balanced";
-  const cv::Mat &roiSourceProb = havePrevProb_ ? prevPersonProb_ : refinedPersonProb_;
 
-  const cv::Size visionSize(fastW_, fastH_);
-  const cv::Rect suggestedROI = paddedProbabilityBounds(
-      roiSourceProb, 0.18f, visionROIPadding_, visionSize);
-  const float suggestedROIMeanProb = meanProbabilityInRect(roiSourceProb, suggestedROI);
-  const float suggestedROIIoU = currentVisionROI_.empty()
-                                    ? 1.0f
-                                    : rectIoU(suggestedROI, currentVisionROI_);
-  const bool shouldUseROI =
-      enableVisionROIAcceleration &&
-      !suggestedROI.empty() &&
-      static_cast<float>(suggestedROI.area()) /
-              static_cast<float>(visionSize.area()) <
-          visionMaxROIAreaFraction_ &&
-      suggestedROIMeanProb >= 0.12f &&
-      (currentVisionROI_.empty() || suggestedROIIoU >= 0.35f ||
-       visionROIStableFrames_ < 2) &&
-      framesSinceVisionFullFrame_ < visionFullFrameInterval_;
-
-  cv::Rect activeROI(0, 0, fastW_, fastH_);
-  int requestWidth = fastW_;
-  int requestHeight = fastH_;
-  cv::Rect2f normalizedCrop;
-  if (shouldUseROI) {
-    activeROI = currentVisionROI_.empty() ? suggestedROI
-                                          : (currentVisionROI_ | suggestedROI);
-    activeROI &= cv::Rect(0, 0, fastW_, fastH_);
-    requestWidth = std::max(visionMinROIDim_, activeROI.width);
-    requestHeight = std::max(visionMinROIDim_, activeROI.height);
-    requestWidth = std::min(requestWidth, fastW_);
-    requestHeight = std::min(requestHeight, fastH_);
-    normalizedCrop = cv::Rect2f(
-        static_cast<float>(activeROI.x) / static_cast<float>(fastW_),
-        static_cast<float>(activeROI.y) / static_cast<float>(fastH_),
-        static_cast<float>(activeROI.width) / static_cast<float>(fastW_),
-        static_cast<float>(activeROI.height) / static_cast<float>(fastH_));
-  }
-
-  const bool ok = shouldUseROI
-                      ? appleSegmentationHelper_->generatePersonProbability(
-                            frame, normalizedCrop, requestWidth, requestHeight,
-                            roiPersonProb, error)
-                      : appleSegmentationHelper_->generatePersonProbability(
-                            frame, fastW_, fastH_, roiPersonProb, error);
-  if (!ok) {
-    std::cerr << "[SegmentationWorker] Vision segmentation failed: " << error
-              << "\n";
-    return false;
-  }
-
-  if (shouldUseROI) {
+  if (completion.usedROI) {
     cv::Mat resizedROIProb;
-    if (roiPersonProb.cols != activeROI.width ||
-        roiPersonProb.rows != activeROI.height) {
-      cv::resize(roiPersonProb, resizedROIProb, activeROI.size(), 0, 0,
-                 cv::INTER_LINEAR);
+    if (completion.prob.cols != completion.activeROI.width ||
+        completion.prob.rows != completion.activeROI.height) {
+      cv::resize(completion.prob, resizedROIProb, completion.activeROI.size(),
+                 0, 0, cv::INTER_LINEAR);
     } else {
-      resizedROIProb = roiPersonProb;
+      resizedROIProb = completion.prob;
     }
-    resizedROIProb.copyTo(newPersonProb(activeROI));
-    currentVisionROI_ = activeROI;
+    resizedROIProb.copyTo(newPersonProb(completion.activeROI));
+    currentVisionROI_ = completion.activeROI;
     ++framesSinceVisionFullFrame_;
   } else {
-    newPersonProb = roiPersonProb;
+    newPersonProb = completion.prob;
     currentVisionROI_ = cv::Rect(0, 0, fastW_, fastH_);
     framesSinceVisionFullFrame_ = 0;
   }
 
-  auto stageEnd = std::chrono::steady_clock::now();
-  visionPerf.addSample(elapsedMs(stageStart, stageEnd));
-
-  stageStart = stageEnd;
   probHistory_[probHistoryWriteIdx_++] = newPersonProb.clone();
   if (probHistoryWriteIdx_ == kMedianWindow) probHistoryWriteIdx_ = 0;
   if (probHistoryCount_ < kMedianWindow) ++probHistoryCount_;
@@ -533,23 +504,25 @@ bool SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame,
 
   const cv::Mat &activeGuidanceFrame = qualityMode_ == "fast"
                                            ? cv::Mat()
-                                           : guidanceFrame;
+                                           : completion.guidance;
   refineSoftPersonMask(prevPersonProb_, activeGuidanceFrame, refinedPersonProb_,
                        fastMask_,
                        personOnThreshold_, personOffThreshold_, minBlobArea);
-  stageEnd = std::chrono::steady_clock::now();
+  auto stageEnd = std::chrono::steady_clock::now();
   cleanupPerf.addSample(elapsedMs(stageStart, stageEnd));
 
-  if (shouldUseROI) {
+  const cv::Size visionSize(fastW_, fastH_);
+  if (completion.usedROI) {
     const cv::Rect refinedROI = paddedProbabilityBounds(
         prevPersonProb_, 0.15f, visionROIPadding_, visionSize);
-    const float refinedMeanProb = meanProbabilityInRect(prevPersonProb_, activeROI);
+    const float refinedMeanProb =
+        meanProbabilityInRect(prevPersonProb_, completion.activeROI);
     if (refinedROI.empty() || refinedMeanProb < 0.08f) {
       currentVisionROI_ = cv::Rect(0, 0, fastW_, fastH_);
       framesSinceVisionFullFrame_ = visionFullFrameInterval_;
       visionROIStableFrames_ = 0;
     } else {
-      currentVisionROI_ = activeROI | refinedROI;
+      currentVisionROI_ = completion.activeROI | refinedROI;
       currentVisionROI_ &= cv::Rect(0, 0, fastW_, fastH_);
       ++visionROIStableFrames_;
     }
@@ -557,12 +530,56 @@ bool SegmentationWorker::detectPersonMask(const AppleVideoFrame &frame,
     visionROIStableFrames_ = 0;
   }
 
-  stageStart = stageEnd;
+  // Publish the ROI suggestion for the next inference request.  This is the
+  // same decision the old serial pipeline made at the top of the next frame,
+  // computed here from the freshly updated state.
+  {
+    const bool enableVisionROIAcceleration =
+        qualityMode_ == "fast" || qualityMode_ == "balanced";
+    const cv::Rect suggestedROI = paddedProbabilityBounds(
+        prevPersonProb_, 0.18f, visionROIPadding_, visionSize);
+    const float suggestedROIMeanProb =
+        meanProbabilityInRect(prevPersonProb_, suggestedROI);
+    const float suggestedROIIoU =
+        currentVisionROI_.empty() ? 1.0f
+                                  : rectIoU(suggestedROI, currentVisionROI_);
+    const bool useROI =
+        enableVisionROIAcceleration && !suggestedROI.empty() &&
+        static_cast<float>(suggestedROI.area()) /
+                static_cast<float>(visionSize.area()) <
+            visionMaxROIAreaFraction_ &&
+        suggestedROIMeanProb >= 0.12f &&
+        (currentVisionROI_.empty() || suggestedROIIoU >= 0.35f ||
+         visionROIStableFrames_ < 2) &&
+        framesSinceVisionFullFrame_ < visionFullFrameInterval_;
+
+    std::lock_guard<std::mutex> lock(roiSuggestionMutex_);
+    roiSuggestion_.useROI = useROI;
+    if (useROI) {
+      cv::Rect activeROI = currentVisionROI_.empty()
+                               ? suggestedROI
+                               : (currentVisionROI_ | suggestedROI);
+      activeROI &= cv::Rect(0, 0, fastW_, fastH_);
+      roiSuggestion_.activeROI = activeROI;
+      roiSuggestion_.requestWidth =
+          std::min(std::max(visionMinROIDim_, activeROI.width), fastW_);
+      roiSuggestion_.requestHeight =
+          std::min(std::max(visionMinROIDim_, activeROI.height), fastH_);
+      roiSuggestion_.normalizedCrop = cv::Rect2f(
+          static_cast<float>(activeROI.x) / static_cast<float>(fastW_),
+          static_cast<float>(activeROI.y) / static_cast<float>(fastH_),
+          static_cast<float>(activeROI.width) / static_cast<float>(fastW_),
+          static_cast<float>(activeROI.height) / static_cast<float>(fastH_));
+    }
+  }
+
+  const auto upscaleStart = std::chrono::steady_clock::now();
   cv::resize(fastMask_, latestMask_, latestMask_.size(), 0, 0,
              cv::INTER_NEAREST);
-  stageEnd = std::chrono::steady_clock::now();
-  upscalePerf.addSample(elapsedMs(stageStart, stageEnd));
-  return true;
+  upscalePerf.addSample(
+      elapsedMs(upscaleStart, std::chrono::steady_clock::now()));
+
+  emit maskReady(latestMask_.clone(), completion.seq);
 }
 
 /**
@@ -586,16 +603,26 @@ void SegmentationWorker::updateGeometry(int width, int height) {
   latestMask_.create(height_, width_, CV_8UC1);
 }
 
-void SegmentationWorker::setEnabled(bool enabled) { enabled_ = enabled; }
+void SegmentationWorker::setEnabled(bool enabled) { enabled_.store(enabled); }
 
 void SegmentationWorker::beginShutdown() {
   shuttingDown_ = true;
-  enabled_ = false;
+  enabled_.store(false);
   {
-    std::lock_guard<std::mutex> lock(pendingAppleFrameMutex_);
-    pendingAppleFrame_ = AppleVideoFrame();
-    pendingAppleGuidanceFrame_.release();
-    pendingAppleFrameDrainScheduled_ = false;
+    std::lock_guard<std::mutex> lock(completionMutex_);
+    completions_.clear();
+    completionDrainScheduled_ = false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(inboxMutex_);
+    inboxFrame_ = AppleVideoFrame();
+    inboxGuidance_.release();
+    inboxValid_ = false;
+  }
+  inferenceStop_.store(true);
+  inboxCv_.notify_one();
+  if (inferenceThread_.joinable()) {
+    inferenceThread_.join();
   }
 }
 
