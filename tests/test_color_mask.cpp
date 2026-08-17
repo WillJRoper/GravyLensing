@@ -64,9 +64,9 @@ static cv::Mat makeFrame(int w, int h, const cv::Scalar &bgr,
 
 /// Create a worker whose target exactly matches a given BGR colour.
 static ColorMaskWorker makeWorker(const cv::Scalar &bgr, int w = 640,
-                                  int h = 480, float lr = 1.0f) {
+                                   int h = 480) {
   auto hsv = toHsv(bgr);
-  return ColorMaskWorker(hsv[0], hsv[1], hsv[2], w, h, lr);
+  return ColorMaskWorker(hsv[0], hsv[1], hsv[2], w, h);
 }
 
 /// Prime the worker's geometry from a dummy background.
@@ -166,12 +166,6 @@ static void test_constructor_nonInteractive() {
   ColorMaskWorker w(hsv[0], hsv[1], hsv[2], 640, 480);
   CHECK(w.isReady());
   CHECK(w.lastError().empty());
-}
-
-static void test_constructor_nonInteractive_lowerRes() {
-  auto hsv = toHsv(cv::Scalar(0, 200, 100));
-  ColorMaskWorker w(hsv[0], hsv[1], hsv[2], 640, 480, 0.5f);
-  CHECK(w.isReady());
 }
 
 // ---------------------------------------------------------------------------
@@ -398,7 +392,6 @@ int main(int argc, char **argv) {
 
   printf("[construction]\n");
   test_constructor_nonInteractive();
-  test_constructor_nonInteractive_lowerRes();
 
   printf("[candidate mask]\n");
   test_buildCandidateMask_exactColor();

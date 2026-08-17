@@ -45,19 +45,21 @@ public:
 
   // Constructor
   LensingWorker(float strength = 1.0f, float softening = 30.0f,
-                int padFactor = 2, int nthreads = 1, float lowerRes = 1.0f,
-                bool distortInside = false, float massBlurSigma = 1.5f);
+                 int padFactor = 2, int nthreads = 1,
+                 float lowerRes = 1.0f, bool distortInside = false,
+                 float massBlurSigma = 1.5f);
 
   // Destructor
   ~LensingWorker();
 
-  // Thread-safe mask submission that coalesces stale work.
-  void submitMask(const cv::Mat &mask);
+  // Thread-safe mask submission that coalesces stale work.  seq identifies
+  // the camera frame the mask was derived from (0 = untracked).
+  void submitMask(const cv::Mat &mask, quint64 seq = 0);
 
 public Q_SLOTS:
 
   // Calculate a new lensing effect when there is a new mask
-  void onMask(const cv::Mat &mask);
+  void onMask(const cv::Mat &mask, quint64 seq = 0);
 
   // Update the geometry when the background changes
   void onBackgroundChange(const cv::Mat &background);
@@ -70,8 +72,9 @@ public Q_SLOTS:
 
 signals:
 
-  // Signal to indicate that lensing is ready
-  void lensedReady(const cv::Mat &lensedImage);
+  // Signal to indicate that lensing is ready.  seq matches the camera frame
+  // the mask was derived from (0 = untracked).
+  void lensedReady(const cv::Mat &lensedImage, quint64 seq);
 
   // Signal to indicate that lensing is ready with a mask
   void lensingError(const std::string &error);
@@ -93,11 +96,8 @@ private:
 
   // The dimensions
   int width_, height_;
+  int outputWidth_ = 0, outputHeight_ = 0;
   int padWidth_, padHeight_; // padded dimensions for FFTs
-
-  // The lower resolution factor for the lensing effect. The resolution at which
-  // the lensing effect is calculed will be this much smaller than the
-  // background resolution.
   float lowerRes_;
 
   // The current background image
@@ -163,5 +163,6 @@ private:
 
   std::mutex pendingMaskMutex_;
   cv::Mat pendingMask_;
+  quint64 pendingMaskSeq_ = 0;
   bool pendingMaskDrainScheduled_ = false;
 };

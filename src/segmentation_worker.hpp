@@ -1,8 +1,8 @@
 /**
  * @file segmentation_worker.hpp
  *
- * This file defines the worker class used to segment a frame to find
- * people using libtorch. A new mask is generated for every new frame.
+ * This file defines the worker class used to segment a frame to find people.
+ * A new mask is generated for every new frame.
  *
  * This file is part of GravyLensing, a real-time gravitational lensing
  * simulation.
@@ -24,8 +24,11 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 #include <QRect>
 
@@ -33,23 +36,10 @@
 #include <QDebug>
 #include <QObject>
 
-// Torch includes (with slots override to avoid conflicts with Qt)
-#if defined(slots)
-#pragma push_macro("slots")
-#undef slots
-#endif
-#include <torch/script.h>
-#include <torch/torch.h>
-#if defined(slots)
-#pragma pop_macro("slots")
-#endif
-
 // External includes
 #include <opencv2/opencv.hpp>
 
-#ifdef __APPLE__
 #include "apple_video_frame.hpp"
-#endif
 
 class SegmentationWorker : public QObject {
   Q_OBJECT
@@ -60,35 +50,26 @@ public:
   // ================== Member Function Prototypes ==================
 
   // Constructor
-  SegmentationWorker(const std::string &modelPath, int modelSize = 512,
-                     int nthreads = 1, float temporalSmooth = 0.6f,
+  SegmentationWorker(int visionSize = 512, float temporalSmooth = 0.6f,
                      float lowerRes = 1.0f,
-                     const std::string &qualityMode = "balanced");
+                     const std::string &qualityMode = "balanced",
+                     int personSensitivity = 50);
   ~SegmentationWorker();
 
-  // Check loaded model
-  bool isModelLoaded() const { return modelLoaded_; }
-  bool usesAppleVision() const { return usingAppleVision_; }
+  bool isReady() const { return ready_; }
 
-  // Thread-safe frame submission that coalesces stale work.
-  void submitFrame(const cv::Mat &frame);
-  void submitGuidanceFrame(const cv::Mat &frame);
-
-#ifdef __APPLE__
-  void submitAppleFrame(const AppleVideoFrame &frame);
+  // Thread-safe frame submission that coalesces stale work.  seq identifies
+  // the captured frame and is carried through to maskReady so consumers can
+  // align the mask with the exact camera frame it came from.
   void submitAppleFrame(const AppleVideoFrame &frame,
-                        const cv::Mat &guidanceFrame);
-#endif
+                        const cv::Mat &guidanceFrame, quint64 seq);
 
   // Whether this worker should process incoming frames.
-  bool isEnabled() const { return enabled_; }
+  bool isEnabled() const { return enabled_.load(); }
 
   // ===================== Qt Slots ==================
 
 public Q_SLOTS:
-
-  // Calculate a new mask when there is a new frame
-  void onFrame(const cv::Mat &frame);
 
   // Enable or disable mask generation while keeping the worker alive.
   void setEnabled(bool enabled);
@@ -101,8 +82,9 @@ public Q_SLOTS:
 
 signals:
 
-  // Signal to emit when the mask is ready
-  void maskReady(const cv::Mat &mask);
+  // Signal to emit when the mask is ready.  seq matches the camera frame the
+  // mask was derived from.
+  void maskReady(const cv::Mat &mask, quint64 seq);
 
   // Signal to emit when there is an error in the segmentation
   void segmentationError(const std::string &error);
@@ -112,50 +94,26 @@ private:
 
   // ================== Private Member Variable Declarations ==================
 
-  // Path to the segmentation model
-  std::string modelPath_;
-
-  // Internal state for segmentation
-  torch::jit::script::Module segmentModel_;
-
-  // The training device
-  torch::Device device_;
-
-  // pre-allocated Tensor for inference on the CPU and GPU
-  torch::Tensor inputCpuTensor_;
-  torch::Tensor inputTensor_;
-
-  // macOS-native Vision backend, preferred when available.
+  // macOS-native Vision backend.
   std::unique_ptr<ApplePersonSegmentationHelper> appleSegmentationHelper_;
-  bool usingAppleVision_ = false;
   std::string qualityMode_;
 
   // Dimensions for the model
   int fastW_, fastH_;
   int width_, height_;
-
-  // The number of threads we have spare (excluding Qt ones)
-  int nthreads_;
-
-  // The lower resolution factor for the lensing effect. The resolution at which
-  // the lensing effect is calculed will be this much smaller than the
-  // background resolution.
   float lowerRes_;
 
   // The Matrix to hold the mask
-  cv::Mat smallFrame_;
-  cv::Mat rgbFrame_;
   cv::Mat fastMask_;
   cv::Mat latestMask_;
   cv::Mat prevPersonProb_;
   cv::Mat smoothMask_;
   cv::Mat refinedPersonProb_;
-  cv::Mat latestGuidanceFrame_;
   cv::Mat adaptiveAlpha_;
   cv::Mat motionProbDelta_;
   cv::Mat uncertaintyBand_;
 
-  // ROI acceleration state for the Vision backend.
+  // ROI acceleration state.
   cv::Rect currentVisionROI_;
   int framesSinceVisionFullFrame_ = 0;
   int visionROIStableFrames_ = 0;
@@ -166,15 +124,12 @@ private:
   // Flag to indicate if we have a previous probability map
   bool havePrevProb_ = false;
 
-  // Which output channel is “person”?
-  static constexpr int kPersonClass_ = 15;
-
   // Drop bolbs in the mask smaller than this
   const int minBlobArea = 50;
 
   // Thresholds for converting the refined soft mask to a binary mask.
-  const float personOnThreshold_ = 0.50f;
-  const float personOffThreshold_ = 0.35f;
+  float personOnThreshold_ = 0.50f;
+  float personOffThreshold_ = 0.35f;
 
   // Temporal median filter on the probability map.
   // Maintains a circular buffer of recent probability maps and uses the
@@ -198,71 +153,56 @@ private:
 
 
 
-  // Did we load successfully?
-  bool modelLoaded_ = false;
+  bool ready_ = false;
 
   // Whether this worker should process frames.
-  bool enabled_ = false;
+  std::atomic<bool> enabled_{false};
   std::atomic<bool> shuttingDown_{false};
 
   // ================== Member Function Prototypes ==================
 
-  // Detect the person mask in the current frame using a segmentation model.
-  bool detectPersonMask(const cv::Mat &frame);
-#ifdef __APPLE__
-  bool detectPersonMask(const AppleVideoFrame &frame,
-                        const cv::Mat &guidanceFrame);
-#endif
-
-  // Set up the segmentation model
-  void setupSegmentationModel(const std::string &modelPath);
+  void setupVision();
 
   // Update the geometry when the background changes
   void updateGeometry(int width, int height);
-  void drainPendingFrame();
-#ifdef __APPLE__
-  void drainPendingAppleFrame();
-#endif
 
-  std::mutex pendingFrameMutex_;
-  cv::Mat pendingFrame_;
-  bool pendingFrameDrainScheduled_ = false;
-  std::mutex guidanceFrameMutex_;
-#ifdef __APPLE__
-  std::mutex pendingAppleFrameMutex_;
-  AppleVideoFrame pendingAppleFrame_;
-  cv::Mat pendingAppleGuidanceFrame_;
-  bool pendingAppleFrameDrainScheduled_ = false;
-#endif
+  // Vision inference runs on a dedicated thread so the temporal/refinement
+  // chain (on the worker's QThread) overlaps with the next Vision request.
+  // The inbox is latest-wins; a single inference slot keeps completions in
+  // capture order.
+  struct VisionCompletion {
+    quint64 seq = 0;
+    cv::Mat prob;
+    cv::Mat guidance; // shallow, read-only
+    cv::Rect activeROI;
+    bool usedROI = false;
+  };
+  struct VisionROISuggestion {
+    cv::Rect2f normalizedCrop;
+    cv::Rect activeROI;
+    int requestWidth = 0;
+    int requestHeight = 0;
+    bool useROI = false;
+  };
+
+  void inferenceLoop();
+  void drainCompletions();
+  void applyPersonResult(VisionCompletion &&completion);
+
+  std::thread inferenceThread_;
+  std::mutex inboxMutex_;
+  std::condition_variable inboxCv_;
+  AppleVideoFrame inboxFrame_;
+  cv::Mat inboxGuidance_;
+  quint64 inboxSeq_ = 0;
+  bool inboxValid_ = false;
+
+  std::mutex completionMutex_;
+  std::deque<VisionCompletion> completions_;
+  bool completionDrainScheduled_ = false;
+
+  std::mutex roiSuggestionMutex_;
+  VisionROISuggestion roiSuggestion_;
+
+  std::atomic<bool> inferenceStop_{false};
 };
-
-/**
- * @brief Pick the device for PyTorch operations.
- *
- * This function checks for MPS and CUDA availability, and returns the
- * appropriate device.
- *
- * @returns torch::Device object representing the selected device.
- */
-static torch::Device pickDevice() {
-  torch::DeviceType dtype = torch::kCPU;
-
-#ifdef USE_MPS
-  if (torch::mps::is_available()) {
-    qInfo() << "[SegmentationWorker] Using MPS backend";
-    return torch::Device(torch::kMPS);
-  }
-#endif
-
-#ifdef USE_CUDA
-  if (torch::cuda::is_available()) {
-    qInfo() << "[SemgmentationWorker] Using CUDA backend";
-    return torch::Device(torch::kCUDA);
-  }
-#endif
-
-  else {
-    qInfo() << "[SemgmentationWorker] Using CPU backend";
-    return torch::Device(torch::kCPU);
-  }
-}

@@ -5,6 +5,7 @@
  */
 
 #include "color_mask.hpp"
+#include "processing_geometry.hpp"
 #include "perf_log.hpp"
 
 #ifdef USE_MPS
@@ -124,9 +125,8 @@ ColorMaskWorker::ColorMaskWorker(const cv::Mat &initialFrame, float lowerRes)
 ColorMaskWorker::ColorMaskWorker(float lowerRes) : lowerRes_(lowerRes) {}
 
 ColorMaskWorker::ColorMaskWorker(float hue, float sat, float val,
-                                   int width, int height, float lowerRes)
-    : lowerRes_(lowerRes),
-      targetHue_(hue),
+                                    int width, int height, float lowerRes)
+    : lowerRes_(lowerRes), targetHue_(hue),
       targetSat_(sat),
       targetVal_(val) {
   enabled_ = true;
@@ -194,6 +194,25 @@ void ColorMaskWorker::drainPendingFrame() {
 void ColorMaskWorker::setError(const std::string &error) {
   lastError_ = error;
   emit maskError(error);
+}
+
+void ColorMaskWorker::setTrackingTuning(int minObjectArea,
+                                        int persistenceFrames,
+                                        float maskSmooth) {
+  minBlobArea_ = std::max(1, minObjectArea);
+  holdLastMaskFrames_ = std::max(0, persistenceFrames);
+  reacquireFrames_ = std::max(1, holdLastMaskFrames_ * 3);
+  maskSmoothAlpha_ = std::clamp(maskSmooth, 0.0f, 1.0f);
+}
+
+void ColorMaskWorker::setTrackedBlobMode(bool enabled) {
+  if (trackedBlobMode_ == enabled)
+    return;
+  trackedBlobMode_ = enabled;
+  smoothedMask_.release();
+  lastGoodMask_.release();
+  haveTrack_ = false;
+  lostFrames_ = 0;
 }
 
 void ColorMaskWorker::updateGeometry(int width, int height) {
@@ -489,7 +508,7 @@ std::vector<ColorMaskWorker::Candidate> ColorMaskWorker::extractCandidates() {
   const int numLabels = cv::connectedComponentsWithStats(
       cleanedMask_, labelImage_, stats_, centroids_, 8, CV_32S);
   const int minBlobArea = std::max(
-      50, static_cast<int>(std::round(kMinBlobArea_ * lowerRes_ * lowerRes_)));
+      20, static_cast<int>(std::round(minBlobArea_ * lowerRes_ * lowerRes_)));
 
   for (int label = 1; label < numLabels; ++label) {
     Candidate candidate;
@@ -684,8 +703,7 @@ void ColorMaskWorker::onFrame(const cv::Mat &frame) {
       // Area-based blob filter — precise, and fast when the mask is
       // sparse (uses boundingRect area as proxy instead of contourArea).
       const int minArea = std::max(
-          20, static_cast<int>(std::round(kMinBlobArea_ * lowerRes_ *
-                                          lowerRes_)));
+          20, static_cast<int>(std::round(minBlobArea_ * lowerRes_ * lowerRes_)));
       if (cv::countNonZero(latestMask_) > minArea) {
         std::vector<std::vector<cv::Point>> contours;
         cv::findContours(latestMask_, contours, cv::RETR_EXTERNAL,
@@ -699,14 +717,7 @@ void ColorMaskWorker::onFrame(const cv::Mat &frame) {
         }
       }
 
-      if (smoothedMask_.empty()) {
-        smoothedMask_ = latestMask_.clone();
-      } else {
-        cv::addWeighted(latestMask_, kMaskSmoothAlpha_, smoothedMask_,
-                        1.0f - kMaskSmoothAlpha_, 0, smoothedMask_);
-      }
-
-      emit maskReady(smoothedMask_.clone());
+      emit maskReady(latestMask_.clone());
 
       const auto t1 = std::chrono::steady_clock::now();
       perf.addSample(
@@ -752,11 +763,11 @@ void ColorMaskWorker::onFrame(const cv::Mat &frame) {
 
     if (!found) {
       ++lostFrames_;
-      if (lostFrames_ >= kReacquireFrames_) {
+      if (lostFrames_ >= reacquireFrames_) {
         haveTrack_ = false;
       }
       // Hold the last good mask briefly to hide one-frame dropouts.
-      if (!lastGoodMask_.empty() && lostFrames_ <= kHoldLastMaskFrames_) {
+      if (!lastGoodMask_.empty() && lostFrames_ <= holdLastMaskFrames_) {
         lastGoodMask_.copyTo(latestMask_);
       } else {
         latestMask_.setTo(0);
@@ -779,8 +790,8 @@ void ColorMaskWorker::onFrame(const cv::Mat &frame) {
     if (smoothedMask_.empty()) {
       smoothedMask_ = latestMask_.clone();
     } else {
-      cv::addWeighted(latestMask_, kMaskSmoothAlpha_,
-                      smoothedMask_, 1.0f - kMaskSmoothAlpha_, 0,
+      cv::addWeighted(latestMask_, maskSmoothAlpha_,
+                      smoothedMask_, 1.0f - maskSmoothAlpha_, 0,
                       smoothedMask_);
     }
     emit maskReady(smoothedMask_.clone());
@@ -796,5 +807,6 @@ void ColorMaskWorker::onFrame(const cv::Mat &frame) {
 }
 
 void ColorMaskWorker::onBackgroundChange(const cv::Mat &background) {
-  updateGeometry(background.cols * lowerRes_, background.rows * lowerRes_);
+  const cv::Size size = calculationSize(background.size(), lowerRes_);
+  updateGeometry(size.width, size.height);
 }

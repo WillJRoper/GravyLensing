@@ -55,7 +55,7 @@ class CameraFeed : public QObject {
 
 public:
   CameraFeed(int deviceIndex = 0, bool flip = false, bool selectROI = false,
-             int fps = 30);
+              int fps = 30, int width = 1280, int height = 720);
   ~CameraFeed();
 
   /// Start continuous capture in this thread
@@ -78,11 +78,15 @@ public:
 
   /// Apply a new ROI rectangle and mask at runtime.
   Q_INVOKABLE void setROI(cv::Rect rect, cv::Mat mask);
+  Q_INVOKABLE void clearROI();
 
   Q_INVOKABLE void setPreviewEnabled(bool enabled) { previewEnabled_ = enabled; }
 
   // Is the camera open?
   bool isOpen() const { return isOpen_; }
+  int actualWidth() const;
+  int actualHeight() const;
+  double actualFps() const;
 
   /// Query the current ROI state so it can be preserved across restarts.
   bool hasROI() const { return doingROI_.load(); }
@@ -96,13 +100,15 @@ public:
   }
 
 signals:
-  /// Emitted as soon as a new frame is ready
-  void frameCaptured(const cv::Mat &frame);
+  /// Emitted as soon as a new frame is ready.  seq identifies the capture so
+  /// downstream stages can align masks/lensed frames with the exact camera
+  /// frame they were derived from.
+  void frameCaptured(const cv::Mat &frame, quint64 seq);
 
 #ifdef __APPLE__
   void nativeFrameCaptured(const AppleVideoFrame &frame);
   void framePairCaptured(const cv::Mat &frame,
-                         const AppleVideoFrame &nativeFrame);
+                         const AppleVideoFrame &nativeFrame, quint64 seq);
 #endif
 
   /// Emitted if there's an error opening or reading the camera
@@ -115,6 +121,8 @@ private:
   // The device index for the camera (0 for default camera)
   int deviceIndex_;
   int fps_ = 30;
+  int width_ = 1280;
+  int height_ = 720;
 
   // OpenCV video capture object
   cv::VideoCapture cap_;

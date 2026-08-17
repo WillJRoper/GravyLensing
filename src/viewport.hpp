@@ -25,6 +25,10 @@
 
 #pragma once
 
+// Standard includes
+#include <deque>
+#include <utility>
+
 // Qt includes
 #include <qtwidgets/QLabel>
 #include <qtwidgets/QMainWindow>
@@ -32,7 +36,6 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QMenu>
-#include <QVector>
 
 // External includes
 #include <opencv2/opencv.hpp>
@@ -52,7 +55,7 @@ public:
 
   void setColorModeActive(bool active);
 
-  void setSettings(const AppSettings &settings) { settings_ = settings; }
+  void setSettings(const AppSettings &settings);
 
   void setDebugGridEnabled(bool enabled);
 
@@ -66,9 +69,7 @@ public:
   float targetVal() const { return targetVal_; }
   bool hasColorTarget() const { return hasTarget_; }
 
-  void setROIState(bool has, int x, int y, int w, int h) {
-    hasROI_ = has; roiX_ = x; roiY_ = y; roiW_ = w; roiH_ = h;
-  }
+  void setROIState(bool has, int x, int y, int w, int h);
   bool hasROI() const { return hasROI_; }
   int roiX() const { return roiX_; }
   int roiY() const { return roiY_; }
@@ -81,22 +82,26 @@ public Q_SLOTS:
 
   /// Update the View > Mask Mode label to reflect the current mode.
   void setMaskModeLabel(bool isColorMode);
-
-  /// Highlight the matching entry in View > Background.
-  void setBackgroundIndexChecked(size_t idx);
+  void setBackgroundCycleState(int seconds);
+  void setShowLensContentsEnabled(bool enabled);
 
   // Image data slots — called from worker threads via Qt::QueuedConnection.
-  void setImage(const cv::Mat &image);
+  // seq identifies the camera frame the data derives from (0 = untracked).
+  void setImage(const cv::Mat &image, quint64 seq);
   void setBackground(const cv::Mat &background);
-  void setLens(const cv::Mat &lens);
+  void setLens(const cv::Mat &lens, quint64 seq);
   void setMask(const cv::Mat &mask);
 
 signals:
   void selectROIRequested();
+  void clearROIRequested();
   void selectColorRequested();
   void toggleMaskModeRequested();
+  void maskModeRequested(bool colorMode);
   void debugGridToggled(bool enabled);
-  void backgroundIndexSelected(size_t idx);
+  void backgroundAutoCycleToggled(bool enabled);
+  void backgroundIntervalRequested(int seconds);
+  void showLensContentsToggled(bool enabled);
   void settingsChanged(const AppSettings &newSettings);
 
 protected:
@@ -105,6 +110,7 @@ protected:
 private:
   void setupMenuBar();
   void setupViewLayout();
+  void updateLensDisplay();
 
   QLabel *imageLabel_;
   QLabel *backgroundLabel_;
@@ -116,6 +122,12 @@ private:
   cv::Mat lens_;
   cv::Mat mask_;
 
+  // Ring buffer of recent camera frames (newest last), used to composite the
+  // camera frame that matches the frame the mask/lens was derived from.
+  static constexpr size_t kCameraFrameBuffer = 10;
+  std::deque<std::pair<quint64, cv::Mat>> cameraFrames_;
+  quint64 lensSeq_ = 0;
+
   Backgrounds *backgrounds_{nullptr};
   AppSettings settings_;
   float targetHue_ = 0;
@@ -123,14 +135,19 @@ private:
   float targetVal_ = 0;
   bool hasTarget_ = false;
   bool hasROI_ = false;
+  bool showLensContents_ = false;
   int roiX_ = 0, roiY_ = 0, roiW_ = 0, roiH_ = 0;
 
   QAction *selectColorAction_ = nullptr;
   QAction *toggleMaskAction_ = nullptr;
   QAction *debugGridAction_ = nullptr;
+  QAction *personLensAction_ = nullptr;
+  QAction *colorLensAction_ = nullptr;
+  QAction *clearROIAction_ = nullptr;
+  QAction *autoCycleAction_ = nullptr;
+  QAction *showLensContentsAction_ = nullptr;
+  QActionGroup *cycleIntervalGroup_ = nullptr;
 
-  QVector<QAction *> bgActions_;
-  QActionGroup *bgActionGroup_ = nullptr;
 };
 
 ViewPort *initViewport(Backgrounds *backgrounds, const AppSettings &settings,

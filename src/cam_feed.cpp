@@ -154,8 +154,10 @@ static cv::Mat applyROIMaskAndCrop(const cv::Mat &src, const cv::Mat &mask,
  * @param selectROI Whether to allow the user to select a region of interest
  *  (ROI) in the camera feed (default is false).
  */
-CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI, int fps)
-    : deviceIndex_(deviceIndex), fps_(fps), flip_(flip), doingROI_(selectROI) {
+CameraFeed::CameraFeed(int deviceIndex, bool flip, bool selectROI, int fps,
+                       int width, int height)
+    : deviceIndex_(deviceIndex), fps_(fps), width_(width), height_(height),
+      flip_(flip), doingROI_(selectROI) {
 
   // Initialize the camera feed and ensure it is opened successfully
   if (!initCamera()) {
@@ -241,6 +243,16 @@ CameraFeed::~CameraFeed() {
     cap_.release();
 }
 
+int CameraFeed::actualWidth() const {
+  return avCamera_ ? static_cast<int>(avCamera_->width()) : 0;
+}
+
+int CameraFeed::actualHeight() const {
+  return avCamera_ ? static_cast<int>(avCamera_->height()) : 0;
+}
+
+double CameraFeed::actualFps() const { return avCamera_ ? avCamera_->fps() : 0.0; }
+
 void CameraFeed::setROI(cv::Rect rect, cv::Mat mask) {
   std::lock_guard<std::mutex> lock(roiMutex_);
   roiRect_ = rect;
@@ -248,6 +260,13 @@ void CameraFeed::setROI(cv::Rect rect, cv::Mat mask) {
   doingROI_.store(true);
   std::cout << "[CameraFeed] ROI updated: "
             << roiRect_.width << "x" << roiRect_.height << "\n";
+}
+
+void CameraFeed::clearROI() {
+  std::lock_guard<std::mutex> lock(roiMutex_);
+  roiRect_ = cv::Rect();
+  roiMask_.release();
+  doingROI_.store(false);
 }
 
 /**
@@ -262,7 +281,7 @@ bool CameraFeed::initCamera() {
 #ifdef __APPLE__
   avCamera_ = std::make_unique<AvFoundationCamera>(deviceIndex_);
   std::string error;
-  if (!avCamera_->open(error, fps_)) {
+  if (!avCamera_->open(error, fps_, width_, height_)) {
     std::cerr << "[CameraFeed] AVFoundation open failed: " << error << "\n";
     avCamera_.reset();
     return false;
@@ -346,6 +365,7 @@ void CameraFeed::startCaptureLoop() {
 
   // Define a local reusable header for the frame
   cv::Mat frame;
+  quint64 frameSeq = 0;
 #ifdef __APPLE__
   AppleVideoFrame nativeFrame;
 #endif
@@ -380,6 +400,8 @@ void CameraFeed::startCaptureLoop() {
       cv::flip(frame, frame, 1);
     }
 
+    ++frameSeq;
+
     // Apply ROI mask, crop to ROI and emit if we are doing ROI selection,
     // otherwise just emit the full frame
     if (doingROI_.load()) {
@@ -391,15 +413,15 @@ void CameraFeed::startCaptureLoop() {
         mask = roiMask_;
       }
       emit frameCaptured(
-          applyROIMaskAndCrop(frame, mask, rect).clone());
+          applyROIMaskAndCrop(frame, mask, rect).clone(), frameSeq);
     } else {
       if (!frame.empty()) {
-        emit frameCaptured(frame.clone());
+        emit frameCaptured(frame.clone(), frameSeq);
       }
 #ifdef __APPLE__
       AppleVideoFrame emittedNativeFrame(nativeFrame.pixelBuffer, flip_);
       emit nativeFrameCaptured(emittedNativeFrame);
-      emit framePairCaptured(frame, emittedNativeFrame);
+      emit framePairCaptured(frame, emittedNativeFrame, frameSeq);
 #endif
     }
 

@@ -2,6 +2,7 @@
 
 #include "avfoundation_camera.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 
@@ -14,8 +15,19 @@ struct FormatChoice {
   AVCaptureDeviceFormat *format = nil;
   AVFrameRateRange *range = nil;
   double fps = 0.0;
+  double fpsDistance = std::numeric_limits<double>::max();
   int pixelCount = std::numeric_limits<int>::max();
+  CMTime frameDuration = kCMTimeInvalid;
 };
+
+static NSArray<AVCaptureDevice *> *discoverVideoDevices() {
+  return [AVCaptureDeviceDiscoverySession
+             discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
+                                                AVCaptureDeviceTypeExternal ]
+                                  mediaType:AVMediaTypeVideo
+                                   position:AVCaptureDevicePositionUnspecified]
+      .devices;
+}
 
 static cv::Mat convertPixelBufferToBgr(CVPixelBufferRef imageBuffer) {
   if (imageBuffer == nullptr) {
@@ -37,28 +49,42 @@ static cv::Mat convertPixelBufferToBgr(CVPixelBufferRef imageBuffer) {
 }
 
 static FormatChoice chooseBestFormat(AVCaptureDevice *device,
-                                     int desiredFps) {
+                                     int desiredFps, int desiredWidth,
+                                     int desiredHeight) {
   FormatChoice best;
+  const int targetWidth = desiredWidth > 0 ? desiredWidth : 1280;
+  const int targetHeight = desiredHeight > 0 ? desiredHeight : 720;
   for (AVCaptureDeviceFormat *format in device.formats) {
     CMVideoDimensions dims =
         CMVideoFormatDescriptionGetDimensions(format.formatDescription);
     const int pixelCount = dims.width * dims.height;
     for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
       const double targetFps = static_cast<double>(desiredFps);
-      // Skip ranges that can't reach the desired frame rate.  Allow a small
-      // epsilon for floating-point drift.
-      if (range.maxFrameRate < targetFps - 0.01)
-        continue;
-      // Pick the range whose maxFrameRate is closest to (but ≥) desiredFps.
-      // Among equal-fps ranges, prefer the smallest pixel count (less
-      // bandwidth / CPU to decode).
-      const double fps = std::min(range.maxFrameRate, targetFps);
-      if (best.format == nil || fps > best.fps + 0.01 ||
-          (std::abs(fps - best.fps) <= 0.01 && pixelCount < best.pixelCount)) {
+      const double fps = std::clamp(targetFps, range.minFrameRate,
+                                    range.maxFrameRate);
+      const double fpsDistance = std::abs(fps - targetFps);
+      const int sizeDistance = std::abs(dims.width - targetWidth) +
+                               std::abs(dims.height - targetHeight);
+      const CMVideoDimensions bestDims =
+          best.format != nil
+              ? CMVideoFormatDescriptionGetDimensions(best.format.formatDescription)
+              : CMVideoDimensions{0, 0};
+      const int bestSizeDistance = std::abs(bestDims.width - targetWidth) +
+                                   std::abs(bestDims.height - targetHeight);
+      if (best.format == nil || fpsDistance < best.fpsDistance - 0.01 ||
+          (std::abs(fpsDistance - best.fpsDistance) <= 0.01 &&
+           sizeDistance < bestSizeDistance)) {
         best.format = format;
         best.range = range;
         best.fps = fps;
+        best.fpsDistance = fpsDistance;
         best.pixelCount = pixelCount;
+        if (std::abs(fps - range.maxFrameRate) <= 0.01)
+          best.frameDuration = range.minFrameDuration;
+        else if (std::abs(fps - range.minFrameRate) <= 0.01)
+          best.frameDuration = range.maxFrameDuration;
+        else
+          best.frameDuration = CMTimeMakeWithSeconds(1.0 / fps, 1000000000);
       }
     }
   }
@@ -78,6 +104,8 @@ public:
     }
 
     std::lock_guard<std::mutex> lock(frameMutex_);
+    width_ = static_cast<int>(CVPixelBufferGetWidth(imageBuffer));
+    height_ = static_cast<int>(CVPixelBufferGetHeight(imageBuffer));
     if (latestPixelBuffer_ != nullptr) {
       CVPixelBufferRelease(latestPixelBuffer_);
       latestPixelBuffer_ = nullptr;
@@ -124,17 +152,22 @@ AvFoundationCamera::AvFoundationCamera(int deviceIndex)
 
 AvFoundationCamera::~AvFoundationCamera() { close(); }
 
-bool AvFoundationCamera::open(std::string &error, int desiredFps) {
+std::vector<std::string> AvFoundationCamera::availableDeviceNames() {
+  std::vector<std::string> names;
+  @autoreleasepool {
+    for (AVCaptureDevice *device in discoverVideoDevices()) {
+      names.emplace_back(device.localizedName.UTF8String);
+    }
+  }
+  return names;
+}
+
+bool AvFoundationCamera::open(std::string &error, int desiredFps,
+                              int desiredWidth, int desiredHeight) {
   close();
 
   @autoreleasepool {
-    NSArray<AVCaptureDevice *> *devices =
-        [AVCaptureDeviceDiscoverySession
-            discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
-                                               AVCaptureDeviceTypeExternal ]
-                                 mediaType:AVMediaTypeVideo
-                                  position:AVCaptureDevicePositionUnspecified]
-            .devices;
+    NSArray<AVCaptureDevice *> *devices = discoverVideoDevices();
 
     if (impl_->deviceIndex_ < 0 || impl_->deviceIndex_ >= static_cast<int>(devices.count)) {
       error = "Camera device index out of range";
@@ -152,12 +185,6 @@ bool AvFoundationCamera::open(std::string &error, int desiredFps) {
     }
 
     AVCaptureSession *session = [[AVCaptureSession alloc] init];
-    if ([session canSetSessionPreset:AVCaptureSessionPreset1280x720]) {
-      session.sessionPreset = AVCaptureSessionPreset1280x720;
-    } else if ([session canSetSessionPreset:AVCaptureSessionPresetHigh]) {
-      session.sessionPreset = AVCaptureSessionPresetHigh;
-    }
-
     if (![session canAddInput:input]) {
       error = "Failed to add AVCapture input";
       return false;
@@ -183,16 +210,17 @@ bool AvFoundationCamera::open(std::string &error, int desiredFps) {
       if ([device isExposureModeSupported:AVCaptureExposureModeContinuousAutoExposure]) {
         device.exposureMode = AVCaptureExposureModeContinuousAutoExposure;
       }
-      const FormatChoice best = chooseBestFormat(device, desiredFps);
+       const FormatChoice best = chooseBestFormat(
+           device, desiredFps, desiredWidth, desiredHeight);
       if (best.format != nil && best.range != nil) {
         device.activeFormat = best.format;
         // Use the exact min/max frame duration from the chosen range
         // rather than constructing CMTimeMake(1, round(fps)).  Some
         // cameras (e.g. external displays) have non‑integer frame
         // durations and reject approximations.
-        device.activeVideoMinFrameDuration = best.range.minFrameDuration;
-        device.activeVideoMaxFrameDuration = best.range.maxFrameDuration;
-        impl_->fps_ = best.range.maxFrameRate;
+        device.activeVideoMinFrameDuration = best.frameDuration;
+        device.activeVideoMaxFrameDuration = best.frameDuration;
+        impl_->fps_ = 1.0 / CMTimeGetSeconds(best.frameDuration);
       }
       [device unlockForConfiguration];
     }
@@ -213,13 +241,16 @@ bool AvFoundationCamera::open(std::string &error, int desiredFps) {
 
     AVCaptureDeviceFormat *activeFormat = device.activeFormat;
     CMVideoDimensions dims = CMVideoFormatDescriptionGetDimensions(activeFormat.formatDescription);
-    impl_->width_ = dims.width;
-    impl_->height_ = dims.height;
-    if (impl_->fps_ <= 0.0) {
-      impl_->fps_ = device.activeVideoMaxFrameDuration.value != 0
-                        ? static_cast<double>(device.activeVideoMaxFrameDuration.timescale) /
-                              static_cast<double>(device.activeVideoMaxFrameDuration.value)
-                        : 0.0;
+    {
+      std::lock_guard<std::mutex> lock(impl_->frameMutex_);
+      impl_->width_ = dims.width;
+      impl_->height_ = dims.height;
+      if (impl_->fps_ <= 0.0) {
+        impl_->fps_ = device.activeVideoMaxFrameDuration.value != 0
+                          ? static_cast<double>(device.activeVideoMaxFrameDuration.timescale) /
+                                static_cast<double>(device.activeVideoMaxFrameDuration.value)
+                          : 0.0;
+      }
     }
   }
 
@@ -371,9 +402,24 @@ bool AvFoundationCamera::latestFrame(cv::Mat &frame,
   return true;
 }
 
-double AvFoundationCamera::width() const { return impl_ ? impl_->width_ : 0.0; }
-double AvFoundationCamera::height() const { return impl_ ? impl_->height_ : 0.0; }
-double AvFoundationCamera::fps() const { return impl_ ? impl_->fps_ : 0.0; }
+double AvFoundationCamera::width() const {
+  if (!impl_)
+    return 0.0;
+  std::lock_guard<std::mutex> lock(impl_->frameMutex_);
+  return impl_->width_;
+}
+double AvFoundationCamera::height() const {
+  if (!impl_)
+    return 0.0;
+  std::lock_guard<std::mutex> lock(impl_->frameMutex_);
+  return impl_->height_;
+}
+double AvFoundationCamera::fps() const {
+  if (!impl_)
+    return 0.0;
+  std::lock_guard<std::mutex> lock(impl_->frameMutex_);
+  return impl_->fps_;
+}
 const char *AvFoundationCamera::backendName() const { return "AVFoundation"; }
 
 #endif

@@ -46,16 +46,16 @@ public:
   int fps;
   bool debugGrid;
   int padFactor;
-  int modelSize;
+  int visionSize;
   float temporalSmooth;
   float lowerRes;
+  int personSensitivity;
   std::string qualityMode;
   int secondsPerBackground;
   bool distortInside;
   bool flip;
   bool selectROI;
   std::string maskMode;
-  std::string modelPath;
   std::string colorModeType;
 
   // Constructor is also the parser
@@ -70,7 +70,7 @@ public:
     // --nthreads <int>
     QCommandLineOption nthreadsOption(
         QStringList() << "n" << "nthreads",
-        "Number of CPU threads used in the calculation (must be >= 2).",
+        "Number of worker threads used for lensing (must be >= 1).",
         "nthreads", QString::number(defaults.nthreads));
     parser.addOption(nthreadsOption);
 
@@ -89,13 +89,13 @@ public:
         "softening", QString::number(defaults.softening));
     parser.addOption(softeningOption);
 
-    // --modelSize <int> (default 512)
-    QCommandLineOption modelSizeOption(
-        QStringList() << "m" << "modelSize",
-        "Segmentation model size, bigger means more accurate people but at the "
+    // --visionSize <int> (default 512)
+    QCommandLineOption visionSizeOption(
+        QStringList() << "m" << "visionSize",
+        "Vision request size, bigger means more accurate people but at the "
         "expense of frame rate (int, default=512).",
-        "modelSize", QString::number(defaults.modelSize));
-    parser.addOption(modelSizeOption);
+        "visionSize", QString::number(defaults.visionSize));
+    parser.addOption(visionSizeOption);
 
     // --device-index <int> (default 0)
     QCommandLineOption deviceIndexOption(
@@ -128,13 +128,6 @@ public:
         QString::number(defaults.padFactor));
     parser.addOption(padFactorOption);
 
-    // --model-path <string>
-    QCommandLineOption modelPathOption(
-        QStringList() << "mp" << "modelPath",
-        "Path to the segmentation model (string).", "modelPath",
-        QString::fromStdString(defaults.modelPath));
-    parser.addOption(modelPathOption);
-
     // --temporal smooth <float> (default is loaded from settings)
     QCommandLineOption temporalSmoothOption(
         QStringList() << "t" << "temporalSmooth",
@@ -144,12 +137,17 @@ public:
         "temporalSmooth", QString::number(defaults.temporalSmooth));
     parser.addOption(temporalSmoothOption);
 
-    // lowerRes <float> (default 0.5)
     QCommandLineOption lowerResOption(
         QStringList() << "lr" << "lowerRes",
-        "Lower resolution factor for the lensing effect (float, default=0.5).",
-        "lowerRes", QString::number(defaults.lowerRes));
+        "Internal lensing calculation scale from 0.1 to 1.0.", "lowerRes",
+        QString::number(defaults.lowerRes));
     parser.addOption(lowerResOption);
+
+    QCommandLineOption personSensitivityOption(
+        QStringList() << "personSensitivity",
+        "Person detection sensitivity from 0 (strict) to 100 (sensitive).",
+        "personSensitivity", QString::number(defaults.personSensitivity));
+    parser.addOption(personSensitivityOption);
 
     QCommandLineOption qualityModeOption(
         QStringList() << "quality" << "qualityMode",
@@ -161,7 +159,7 @@ public:
     QCommandLineOption secondsPerBackgroundOption(
         QStringList() << "sb" << "secondsPerBackground",
         "Seconds per background image, if -1 then background images are "
-        "selected through the 0-9 keys (int, default=-1).",
+        "selected with the arrow keys (int, default=-1).",
         "secondsPerBackground", QString::number(defaults.secondsPerBackground));
     parser.addOption(secondsPerBackgroundOption);
 
@@ -217,8 +215,8 @@ public:
     };
 
     opts.nthreads = parser.value(nthreadsOption).toInt(&ok);
-    if (!ok || opts.nthreads < 2) {
-      std::cerr << "Error: --nthreads must be an integer >= 2.\n";
+    if (!ok || opts.nthreads < 1) {
+      std::cerr << "Error: --nthreads must be a positive integer.\n";
       std::exit(-1);
     }
 
@@ -234,9 +232,9 @@ public:
       std::exit(-1);
     }
 
-    opts.modelSize = parser.value(modelSizeOption).toInt(&ok);
+    opts.visionSize = parser.value(visionSizeOption).toInt(&ok);
     if (!ok) {
-      std::cerr << "Error: --modelSize must be an integer.\n";
+      std::cerr << "Error: --visionSize must be an integer.\n";
       std::exit(-1);
     }
 
@@ -261,12 +259,6 @@ public:
       std::exit(-1);
     }
 
-    opts.modelPath = parser.value(modelPathOption).toStdString();
-    if (opts.modelPath.empty()) {
-      std::cerr << "Error: --modelPath must be a non-empty string.\n";
-      std::exit(-1);
-    }
-
     opts.temporalSmooth = parser.value(temporalSmoothOption).toFloat(&ok);
     if (!ok) {
       std::cerr << "Error: --temporalSmooth must be a float.\n";
@@ -274,8 +266,14 @@ public:
     }
 
     opts.lowerRes = parser.value(lowerResOption).toFloat(&ok);
-    if (!ok) {
-      std::cerr << "Error: --lowerRes must be a float.\n";
+    if (!ok || opts.lowerRes < 0.1f || opts.lowerRes > 1.0f) {
+      std::cerr << "Error: --lowerRes must be between 0.1 and 1.0.\n";
+      std::exit(-1);
+    }
+
+    opts.personSensitivity = parser.value(personSensitivityOption).toInt(&ok);
+    if (!ok || opts.personSensitivity < 0 || opts.personSensitivity > 100) {
+      std::cerr << "Error: --personSensitivity must be between 0 and 100.\n";
       std::exit(-1);
     }
 

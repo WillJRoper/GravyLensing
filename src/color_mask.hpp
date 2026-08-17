@@ -65,8 +65,8 @@ public:
 
   /// Build a tracker pre-loaded with an explicit HSV target (skips the
   /// interactive colour picker).  Intended for tests and scripting.
-  ColorMaskWorker(float hue, float sat, float val,
-                  int width, int height, float lowerRes = 1.0f);
+  ColorMaskWorker(float hue, float sat, float val, int width, int height,
+                  float lowerRes = 1.0f);
 
   /// Whether initialization completed successfully.
   bool isReady() const { return ready_; }
@@ -109,10 +109,12 @@ public Q_SLOTS:
   void setEnabled(bool enabled);
 
   /// Switch between Fixed Color Key (false) and Tracked Color Blob (true).
-  void setTrackedBlobMode(bool enabled) { trackedBlobMode_ = enabled; }
+  void setTrackedBlobMode(bool enabled);
 
   /// Override the HSV tolerances used for the keyed colour range.
   void setTolerances(int hue, int sat, int val);
+  void setTrackingTuning(int minObjectArea, int persistenceFrames,
+                         float maskSmooth);
 
   /// Resize the output mask when the background geometry changes.
   void onBackgroundChange(const cv::Mat &background);
@@ -154,8 +156,6 @@ private:
   void setError(const std::string &error);
   void drainPendingFrame();
 
-  // Output scaling matches the lower-resolution lensing path.
-  float lowerRes_;
   int width_ = 0;
   int height_ = 0;
   cv::Size frameSize_;
@@ -201,7 +201,7 @@ private:
 
   // Tracking defaults. These are deliberately conservative to prefer stability.
   static constexpr int kPatchRadius_ = 20;
-  static constexpr int kMinBlobArea_ = 500;
+  int minBlobArea_ = 500;
   static constexpr int kOpenKernel_ = 3;
   static constexpr int kCloseKernel_ = 9;
   static constexpr int kErodeKernel_ = 5;
@@ -211,7 +211,8 @@ private:
   static constexpr int kValTolerance_ = 80;
   static constexpr int kMinSaturation_ = 50;
   static constexpr float kMinConfidenceForTrack_ = 0.25f;
-  static constexpr int kHoldLastMaskFrames_ = 6;
-  static constexpr int kReacquireFrames_ = 18;
-  static constexpr float kMaskSmoothAlpha_ = 0.5f;
+  int holdLastMaskFrames_ = 6;
+  int reacquireFrames_ = 18;
+  float maskSmoothAlpha_ = 0.5f;
+  float lowerRes_ = 1.0f;
 };

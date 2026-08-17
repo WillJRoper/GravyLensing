@@ -7,23 +7,21 @@ Festival Of Speed Future Lab.
 
 ## Features
 
-- **Live camera input**: Captures webcam feed in real time (native AVFoundation on
-  macOS, OpenCV `VideoCapture` on Linux).
+- **Live camera input**: Captures webcam feed through native AVFoundation.
 - **Metal GPU acceleration** (macOS only): Offloads colour-key thresholding and
   lens-map construction to the GPU.
 - **Fixed Color Key mode**: Chroma-key style HSV masking against a user-selected
   target colour.
 - **Tracked Color Blob mode** (advanced): Connected-component blob tracking for
   selective single-object masking.
-- **Person segmentation mode**: Uses TorchScript models (LR-ASPP or DeepLabV3)
-  with MPS/GPU inference for person detection.
+- **Person segmentation mode**: Uses native Apple Vision with no external model.
 - **FFT-based lensing**: Applies gravitational deflection to background images
   based on the generated mask.
 - **Multi-threaded**: OpenMP and threaded FFTW3 plans keep all pipeline stages
   concurrent.
 - **Qt6 GUI**: Lensed output with an optional 2×2 diagnostic grid.
-- **Background cycling**: Loads up to 10 images from `backgrounds/`; switch with
-  `0`–`9` keys, a menu, or auto-cycle.
+- **Background cycling**: Discovers supported images in the selected directory;
+  switch with arrow keys, the menu, or auto-cycle.
 - **Session-driven settings**: All configuration is persisted through an
   explicit startup dialog. Live mode and debug-grid toggles survive restarts.
 - **Coalescing frame delivery**: Workers accept only the most recently arrived
@@ -37,27 +35,35 @@ Festival Of Speed Future Lab.
   `fftw3f_threads`)
 - **OpenCV** ≥ 4
 - **Qt6** — `Core`, `Gui`, `Widgets`
-- **libtorch** — PyTorch C++ API (≥ 2.0)
-- **Python 3.8+** — only for the optional model-generation script and the
-  standalone Python example
 
 macOS additionally links these system frameworks (no manual install needed):
 
 - AVFoundation, CoreMedia, CoreVideo — camera capture
 - Metal, MetalPerformanceShaders, Foundation — GPU acceleration
 
+The distributed macOS app requires Apple Silicon and macOS 14 or newer.
+
 ## Installation
 
-### Clone
+### macOS
+
+Apple Silicon users can download the latest DMG from
+[GitHub Releases](https://github.com/WillJRoper/gravy-lensing/releases), drag
+**GravyLensing** to **Applications**, and open it. No Homebrew, Terminal, or
+separate dependencies are required.
+
+### Build from source
+
+#### Clone
 
 ```bash
 git clone https://github.com/WillJRoper/gravy-lensing.git
 cd gravy-lensing
 ```
 
-### Dependencies
+#### Dependencies
 
-#### macOS (Homebrew)
+##### macOS (Homebrew)
 
 ```bash
 brew install cmake fftw libomp opencv qt
@@ -65,40 +71,18 @@ brew install cmake fftw libomp opencv qt
 
 `libomp` is required because AppleClang does not ship OpenMP by default.
 
-#### Linux (Ubuntu/Debian)
-
-```bash
-sudo apt update
-sudo apt install cmake build-essential libfftw3-dev libfftw3-single3 \
-  libopencv-dev qt6-base-dev python3 python3-venv python3-pip
-```
-
-#### libtorch
-
-Download libtorch from [pytorch.org](https://pytorch.org/). Pass its path as
-`CMAKE_PREFIX_PATH` during configuration.
-
 ## Build
 
 ```bash
 cmake -B build \
-  -DCMAKE_PREFIX_PATH="/path/to/libtorch" \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-
-On macOS with Homebrew libtorch:
-
-```bash
-cmake -B build \
-  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qtbase;/opt/homebrew/opt/libomp;/path/to/libtorch" \
+  -DCMAKE_PREFIX_PATH="/opt/homebrew/opt/qtbase;/opt/homebrew/opt/libomp" \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
 If FFTW3 is installed in a non-standard location, add `-DFFTW3_ROOT=/path/to/fftw3`.
 
-The executable `gravy_lens` is placed in the project root.
+CMake creates `build/GravyLensing.app`.
 
 ### Build options
 
@@ -106,24 +90,6 @@ The executable `gravy_lens` is placed in the project root.
 |------|---------|-------------|
 | `-DENABLE_PROFILING=ON` | OFF | Periodic `[Perf]` log lines showing average ms and fps per pipeline stage |
 | `-DBUILD_TESTS=OFF` | ON | Skip building the unit-test binary |
-
-## Segmentation models
-
-The repository ships a default model at
-`models/lraspp_torchscript-traced_float32_512_512.pt`, which is what the app
-uses for fresh installs in Person mode.
-
-The script `models/get_models.py` can generate additional models:
-
-```bash
-pip install torch torchvision
-python models/get_models.py --model lraspp --format quantized
-```
-
-Supported backbones: `deeplab`, `lraspp`.  
-Supported formats: `torchscript-scripted`, `torchscript-traced`, `quantized`, `onnx`.
-
-See `models/README` for the models already included.
 
 ## Usage
 
@@ -133,8 +99,10 @@ See `models/README` for the models already included.
 ./gravy_lens
 ```
 
-The session-setup dialog opens. Pick the mask source, adjust the relevant
-section, then click **Start Session**.
+The guided Session Setup opens with remembered choices for subject detection,
+camera, quality, region, and backgrounds. The recommended defaults require no
+configuration; click **Start Session**. Use **Settings...** for full
+control.
 
 ### CLI arguments
 
@@ -145,17 +113,19 @@ saved session setting. Boolean flags accept an explicit `--no-` counterpart.
 Usage: ./gravy_lens [options]
 
 Options:
-  -n, --nthreads <n>              CPU threads (must be ≥ 2; default 12).
+  -n, --nthreads <n>              Lensing worker threads (default: cores minus 2).
   -s, --strength <f>              Lens strength multiplier (default 4.0).
   -f, --softening <f>             Kernel softening radius in px (default 50.0).
-  -m, --modelSize <n>             Segmentation model input size (default 512).
+  -m, --visionSize <n>            Vision request size (default 512).
   -d, --deviceIndex <n>           Camera device index (default 0).
+  --fps, --frameRate <n>           Target camera frame rate (default 30).
   -g, --debugGrid                 Show 2×2 diagnostic grid at start.
   --no-debugGrid                  Force the debug grid off.
   -p, --padFactor <n>             FFT padding multiplier (default 2).
-  --mp, --modelPath <path>        TorchScript model path.
   -t, --temporalSmooth <f>        Mask temporal blending factor (default 0.25).
-  --lr, --lowerRes <f>            Resolution scale for lensing, 0.1–1.0 (default 0.5).
+  --personSensitivity <n>         Person sensitivity, 0–100 (default 50).
+  --lr, --lowerRes <f>            Internal calculation scale, 0.1–1.0.
+  --quality, --qualityMode <mode>  fast, balanced, high, or custom.
   --sb, --secondsPerBackground <n> Seconds per background; -1 = manual (default -1).
   --di, --distortInside           Also lens the interior of the mask (default on).
   --no-distortInside              Force interior distortion off.
@@ -176,16 +146,22 @@ Choose **Person** mode and click **Start Session**.
 ### Settings panel
 
 - The dialog is scrollable and works on smaller laptop displays.
-- **Person Detection** controls are enabled only when Person mode is selected.
-- **Color Detection** controls are enabled only when Color mode is selected.
-- **Resolution scale** uses a slider alongside the spin box.
+- Only settings for the selected detection mode are shown.
+- Recommended presets hide technical controls; **Custom** reveals them.
+- Camera and background choices are validated directly in the dialog.
+- Camera capture resolution can be Automatic, 480p, 720p, or 1080p; the
+  selected camera's actual format appears in the session window title.
+- **Lens Edge Softness** controls boundary smoothing independently of person
+  detection quality.
+- Tracked-colour mode exposes minimum object size, tracking persistence, and
+  mask stability.
+- The Backgrounds page reports processed-cache size and can rebuild it.
 - **Restore Defaults** resets every control to shipped defaults.
 - Colour and ROI selections persist across session restarts.
 
 ### Mask modes
 
-**Person (AI segmentation)** — TorchScript model with MPS/GPU acceleration where
-available.
+**Person detection** — native Apple Vision person segmentation.
 
 **Color tracking** with two sub-modes:
 
@@ -202,7 +178,7 @@ In Color mode:
 - Click the target object in the OpenCV picker window, or press `Esc`/`c` to
   cancel.
 - The measured HSV spread is used as the starting tolerance range.
-- Colour mode does not require a segmentation model.
+- Colour mode runs independently of person detection.
 
 ### During a session
 
@@ -212,9 +188,30 @@ In Color mode:
 | Select region of interest | `Shift+R` | File > Select Region... |
 | Toggle debug grid | `Shift+D` | View > Debug Grid |
 | Switch mask mode | `Shift+M` | View > Mask Mode |
-| Switch background | `0`–`9` | View > Background |
+| Previous / next background | `Left` / `Right` | View > Background |
 | Open session settings | `Cmd+,` | Session > Session Settings... |
 | Quit | `Esc` / `Cmd+Q` | File > Quit |
+
+### Custom backgrounds
+
+The macOS app includes a default set of backgrounds. To use your own, open
+**Session > Session Settings...**, choose a backgrounds directory, and restart
+the session. Supported images in that directory are discovered automatically;
+use the left and right arrow keys to move through them. **Restore Defaults**
+switches back to the packaged backgrounds.
+
+Background resolution directly affects FFT memory use and frame rate. Before a
+session starts, backgrounds are resized and cached at the selected output size.
+Settings offers presets from 640x360 through 4K, explicit custom width
+and height, and crop, letterbox, or stretch fitting. 1080p at 30 fps is the
+recommended starting point; lower resolution before lowering frame rate when
+performance is poor.
+
+Three resolutions are independent: camera capture resolution controls input,
+background resolution controls cached and final output size, and calculation
+scale controls internal mask and FFT geometry before the result is upscaled.
+Fast, Balanced, and High Quality choose sensible calculation scales; Custom
+reveals the scale directly in the Advanced category.
 
 ### Restarting a session
 
@@ -223,18 +220,6 @@ In Color mode:
 3. Click **Restart Session**.
 
 The current colour target and ROI are preserved across restarts where possible.
-
-## Python example
-
-`python_example.py` is a standalone Python demo with the same pipeline, but
-without the performance of the C++ version.
-
-```bash
-pip install torch torchvision opencv-python numpy
-python python_example.py
-```
-
-It loads a background from `backgrounds/` automatically.
 
 ## Contributing
 

@@ -25,10 +25,22 @@
 #include <filesystem>
 #include <string>
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
+
 // Local includes
 #include "backgrounds.hpp"
 
 namespace fs = std::filesystem;
+
+namespace {
+QString backgroundCacheDir() {
+  return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) +
+         "/backgrounds";
+}
+} // namespace
 
 // The supported image file extensions (lower-case, upper-case is handled
 // by lower-case conversion)
@@ -44,8 +56,10 @@ const std::vector<std::string> Backgrounds::kImageExts = {
  *
  * @return The Backgrounds object containing the loaded images.
  */
-Backgrounds *initBackgrounds(const std::string &dir) {
-  Backgrounds *backgrounds = new Backgrounds(dir);
+Backgrounds *initBackgrounds(const std::string &dir, int width, int height,
+                             const std::string &fitMode, bool forceRebuild) {
+  Backgrounds *backgrounds =
+      new Backgrounds(dir, width, height, fitMode, forceRebuild);
   if (!backgrounds->load()) {
     std::cerr << "Fatal: No images found in directory: " << dir << "\n";
     std::exit(EXIT_FAILURE);
@@ -58,7 +72,49 @@ Backgrounds *initBackgrounds(const std::string &dir) {
  *
  * @param dir path to folder containing your images
  */
-Backgrounds::Backgrounds(const std::string &dir) : dir_(dir) {}
+Backgrounds::Backgrounds(const std::string &dir, int width, int height,
+                         const std::string &fitMode, bool forceRebuild)
+    : dir_(dir), width_(width), height_(height), fitMode_(fitMode),
+      forceRebuild_(forceRebuild) {}
+
+size_t Backgrounds::discoverableImageCount(const std::string &dir) {
+  size_t count = 0;
+  try {
+    if (!fs::exists(dir) || !fs::is_directory(dir))
+      return 0;
+    for (const auto &entry : fs::directory_iterator(dir)) {
+      if (!entry.is_regular_file())
+        continue;
+      auto ext = entry.path().extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      if (std::find(kImageExts.begin(), kImageExts.end(), ext) !=
+              kImageExts.end() &&
+          cv::haveImageReader(entry.path().string()))
+        ++count;
+    }
+  } catch (const fs::filesystem_error &) {
+    return 0;
+  }
+  return count;
+}
+
+size_t Backgrounds::cacheImageCount() {
+  return QDir(backgroundCacheDir()).entryList({"*.png"}, QDir::Files).size();
+}
+
+uint64_t Backgrounds::cacheSizeBytes() {
+  uint64_t bytes = 0;
+  const QDir dir(backgroundCacheDir());
+  for (const QFileInfo &file : dir.entryInfoList({"*.png"}, QDir::Files))
+    bytes += static_cast<uint64_t>(file.size());
+  return bytes;
+}
+
+bool Backgrounds::clearCache() {
+  QDir dir(backgroundCacheDir());
+  return !dir.exists() || dir.removeRecursively();
+}
 
 /**
  * @brief Scan & load *all* images with “known” extensions.
@@ -66,46 +122,83 @@ Backgrounds::Backgrounds(const std::string &dir) : dir_(dir) {}
  * @return false if directory doesn’t exist or no images found.
  */
 bool Backgrounds::load() {
-  if (!fs::exists(dir_) || !fs::is_directory(dir_))
-    return false;
+  std::vector<std::string> paths;
 
-  // collect all matching paths
-  for (auto const &entry : fs::directory_iterator(dir_)) {
-    if (!entry.is_regular_file())
-      continue;
+  try {
+    if (!fs::exists(dir_) || !fs::is_directory(dir_))
+      return false;
 
-    auto ext = entry.path().extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
+    // collect all matching paths
+    for (auto const &entry : fs::directory_iterator(dir_)) {
+      if (!entry.is_regular_file())
+        continue;
 
-    if (std::find(kImageExts.begin(), kImageExts.end(), ext) !=
-        kImageExts.end()) {
-      paths_.push_back(entry.path().string());
+      auto ext = entry.path().extension().string();
+      std::transform(ext.begin(), ext.end(), ext.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+
+      if (std::find(kImageExts.begin(), kImageExts.end(), ext) !=
+          kImageExts.end()) {
+        paths.push_back(entry.path().string());
+      }
     }
+  } catch (const fs::filesystem_error &) {
+    return false;
   }
 
-  if (paths_.empty())
+  if (paths.empty())
     return false;
 
   // sort so numbering is stable
-  std::sort(paths_.begin(), paths_.end());
+  std::sort(paths.begin(), paths.end());
 
-  if (paths_.size() > 10) {
-    std::cerr << "Warning: More than 10 images found, only the first 10 are "
-                 "accessible.\n";
-    paths_.resize(10);
-  }
-
-  // load into memory
-  images_.reserve(paths_.size());
-  for (auto const &p : paths_) {
+  std::vector<std::string> validPaths;
+  cv::Mat firstImage;
+  for (auto const &p : paths) {
     cv::Mat img;
-    if (loadImage(p, img)) {
-      images_.push_back(std::move(img));
+    std::string cachedPath;
+    if (prepareImage(p, cachedPath, img)) {
+      validPaths.push_back(cachedPath);
+      if (firstImage.empty())
+        firstImage = std::move(img);
     }
   }
 
-  return !images_.empty();
+  if (validPaths.empty())
+    return false;
+
+  paths_ = std::move(validPaths);
+  currentImage_ = std::move(firstImage);
+  currentIdx_ = 0;
+  return true;
+}
+
+bool Backgrounds::setDirectory(const std::string &dir) {
+  return setSource(dir, width_, height_, fitMode_);
+}
+
+bool Backgrounds::setSource(const std::string &dir, int width, int height,
+                            const std::string &fitMode, bool forceRebuild) {
+  const std::string previousDir = dir_;
+  const int previousWidth = width_;
+  const int previousHeight = height_;
+  const std::string previousFitMode = fitMode_;
+  dir_ = dir;
+  width_ = width;
+  height_ = height;
+  fitMode_ = fitMode;
+  forceRebuild_ = forceRebuild;
+  if (!load()) {
+    dir_ = previousDir;
+    width_ = previousWidth;
+    height_ = previousHeight;
+    fitMode_ = previousFitMode;
+    forceRebuild_ = false;
+    return false;
+  }
+  forceRebuild_ = false;
+  emit backgroundChanged(current());
+  return true;
 }
 
 /**
@@ -116,9 +209,66 @@ bool Backgrounds::load() {
  *
  * @return true if the image was loaded successfully, false otherwise
  */
-bool Backgrounds::loadImage(const std::string &path, cv::Mat &out) {
+bool Backgrounds::loadImage(const std::string &path, cv::Mat &out) const {
   out = cv::imread(path, cv::IMREAD_COLOR);
   return !out.empty();
+}
+
+bool Backgrounds::prepareImage(const std::string &path,
+                               std::string &cachedPath, cv::Mat &out) const {
+  if (width_ < 1 || height_ < 1)
+    return false;
+
+  const QFileInfo source(QString::fromStdString(path));
+  static constexpr int kCacheSchemaVersion = 2;
+  const QByteArray cacheKey =
+      (source.absoluteFilePath() + "|" + QString::number(source.size()) + "|" +
+       QString::number(source.lastModified().toMSecsSinceEpoch()) + "|" +
+       QString::number(width_) + "x" + QString::number(height_) + "|" +
+       QString::fromStdString(fitMode_) + "|v" +
+       QString::number(kCacheSchemaVersion))
+          .toUtf8();
+  const QString cacheDir = backgroundCacheDir();
+  if (!QDir().mkpath(cacheDir))
+    return false;
+  const QString cacheFile =
+      cacheDir + "/" +
+      QCryptographicHash::hash(cacheKey, QCryptographicHash::Sha256).toHex() +
+      ".png";
+  cachedPath = cacheFile.toStdString();
+
+  if (!forceRebuild_ && loadImage(cachedPath, out) && out.cols == width_ &&
+      out.rows == height_)
+    return true;
+
+  const cv::Mat sourceImage = cv::imread(path, cv::IMREAD_COLOR);
+  if (sourceImage.empty())
+    return false;
+
+  if (fitMode_ == "stretch") {
+    cv::resize(sourceImage, out, cv::Size(width_, height_), 0, 0,
+               cv::INTER_AREA);
+  } else {
+    const double widthScale = static_cast<double>(width_) / sourceImage.cols;
+    const double heightScale = static_cast<double>(height_) / sourceImage.rows;
+    const double scale = fitMode_ == "fit" ? std::min(widthScale, heightScale)
+                                            : std::max(widthScale, heightScale);
+    cv::Mat resized;
+    cv::resize(sourceImage, resized, {}, scale, scale,
+               scale < 1.0 ? cv::INTER_AREA : cv::INTER_CUBIC);
+    if (fitMode_ == "fit") {
+      out = cv::Mat::zeros(height_, width_, CV_8UC3);
+      const int x = (width_ - resized.cols) / 2;
+      const int y = (height_ - resized.rows) / 2;
+      resized.copyTo(out(cv::Rect(x, y, resized.cols, resized.rows)));
+    } else {
+      const int x = (resized.cols - width_) / 2;
+      const int y = (resized.rows - height_) / 2;
+      out = resized(cv::Rect(x, y, width_, height_)).clone();
+    }
+  }
+
+  return cv::imwrite(cachedPath, out);
 }
 
 /**
@@ -126,7 +276,7 @@ bool Backgrounds::loadImage(const std::string &path, cv::Mat &out) {
  *
  * @return reference to the current image
  */
-const cv::Mat &Backgrounds::current() const { return images_[currentIdx_]; }
+const cv::Mat &Backgrounds::current() const { return currentImage_; }
 
 /**
  * @brief Advance to the next image (wraps round); returns false if none loaded.
@@ -134,10 +284,15 @@ const cv::Mat &Backgrounds::current() const { return images_[currentIdx_]; }
  * @return true if the next image was set successfully, false otherwise
  */
 bool Backgrounds::next() {
-  if (images_.empty())
+  if (paths_.empty())
     return false;
-  currentIdx_ = (currentIdx_ + 1) % images_.size();
-  emit backgroundChanged(images_[currentIdx_]);
+  const size_t nextIdx = (currentIdx_ + 1) % paths_.size();
+  cv::Mat nextImage;
+  if (!loadImage(paths_[nextIdx], nextImage))
+    return false;
+  currentIdx_ = nextIdx;
+  currentImage_ = std::move(nextImage);
+  emit backgroundChanged(currentImage_);
   return true;
 }
 
@@ -148,24 +303,16 @@ bool Backgrounds::next() {
  * @return true if the previous image was set successfully, false otherwise
  */
 bool Backgrounds::previous() {
-  if (images_.empty())
+  if (paths_.empty())
     return false;
-  currentIdx_ = (currentIdx_ + images_.size() - 1) % images_.size();
-  emit backgroundChanged(images_[currentIdx_]);
-  return true;
-}
-
-/**
- * @brief Select image by zero-based index; returns false if idx out of range.
- *
- * @param idx index of the image to set
- * @return true if the image was set successfully, false otherwise
- */
-bool Backgrounds::setIndex(size_t idx) {
-  if (idx >= images_.size())
+  const size_t previousIdx =
+      (currentIdx_ + paths_.size() - 1) % paths_.size();
+  cv::Mat previousImage;
+  if (!loadImage(paths_[previousIdx], previousImage))
     return false;
-  currentIdx_ = idx;
-  emit backgroundChanged(images_[currentIdx_]);
+  currentIdx_ = previousIdx;
+  currentImage_ = std::move(previousImage);
+  emit backgroundChanged(currentImage_);
   return true;
 }
 
@@ -174,7 +321,7 @@ bool Backgrounds::setIndex(size_t idx) {
  *
  * @return number of loaded images
  */
-size_t Backgrounds::size() const noexcept { return images_.size(); }
+size_t Backgrounds::size() const noexcept { return paths_.size(); }
 
 /**
  * @brief How many rows are in the current background?
@@ -182,9 +329,9 @@ size_t Backgrounds::size() const noexcept { return images_.size(); }
  * @return number of rows in the current image
  */
 int Backgrounds::rows() const noexcept {
-  if (images_.empty())
+  if (currentImage_.empty())
     return 0;
-  return images_[currentIdx_].rows;
+  return currentImage_.rows;
 }
 
 /**
@@ -193,7 +340,7 @@ int Backgrounds::rows() const noexcept {
  * @return number of columns in the current image
  */
 int Backgrounds::cols() const noexcept {
-  if (images_.empty())
+  if (currentImage_.empty())
     return 0;
-  return images_[currentIdx_].cols;
+  return currentImage_.cols;
 }

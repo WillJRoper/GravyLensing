@@ -25,6 +25,7 @@
 // Standard includes
 #include <string>
 #include <vector>
+#include <cstdint>
 
 // Qt includes
 #include <QDebug>
@@ -44,11 +45,24 @@ class Backgrounds : public QObject {
 
 public:
   /// @param dir  path to folder containing your images
-  explicit Backgrounds(const std::string &dir);
+  explicit Backgrounds(const std::string &dir, int width = 1920,
+                       int height = 1080,
+                       const std::string &fitMode = "crop",
+                       bool forceRebuild = false);
 
   /// Scan & load *all* images with “known” extensions.
   /// Returns false if directory doesn’t exist or no images found.
   bool load();
+
+  /// Scan a new directory, retaining the current images if loading fails.
+  bool setDirectory(const std::string &dir);
+  bool setSource(const std::string &dir, int width, int height,
+                 const std::string &fitMode, bool forceRebuild = false);
+
+  static size_t discoverableImageCount(const std::string &dir);
+  static size_t cacheImageCount();
+  static uint64_t cacheSizeBytes();
+  static bool clearCache();
 
   /// Get the currently-selected image.
   const cv::Mat &current() const;
@@ -58,9 +72,6 @@ public:
 
   /// Go back to the previous image (wraps round); returns false if none loaded.
   bool previous();
-
-  /// Select image by zero-based index; returns false if idx out of range.
-  bool setIndex(size_t idx);
 
   /// How many images did we actually load?
   size_t size() const noexcept;
@@ -75,16 +86,24 @@ signals:
 
 private:
   std::string dir_;
+  int width_;
+  int height_;
+  std::string fitMode_;
+  bool forceRebuild_ = false;
   std::vector<std::string> paths_;
-  std::vector<cv::Mat> images_;
+  cv::Mat currentImage_;
   size_t currentIdx_{0};
 
   // supported extensions (lower-case)
   static const std::vector<std::string> kImageExts;
 
   /// helper to load a single image by path
-  static bool loadImage(const std::string &path, cv::Mat &out);
+  bool loadImage(const std::string &path, cv::Mat &out) const;
+  bool prepareImage(const std::string &path, std::string &cachedPath,
+                    cv::Mat &out) const;
 };
 
 // The getter called in main.cpp
-Backgrounds *initBackgrounds(const std::string &dir);
+Backgrounds *initBackgrounds(const std::string &dir, int width, int height,
+                             const std::string &fitMode,
+                             bool forceRebuild = false);

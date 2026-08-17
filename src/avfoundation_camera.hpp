@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <opencv2/opencv.hpp>
 
@@ -20,7 +21,10 @@ public:
   explicit AvFoundationCamera(int deviceIndex);
   ~AvFoundationCamera();
 
-  bool open(std::string &error, int desiredFps = 30);
+  static std::vector<std::string> availableDeviceNames();
+
+  bool open(std::string &error, int desiredFps = 30, int desiredWidth = 1280,
+            int desiredHeight = 720);
   void close();
 
   bool waitForFrame(cv::Mat &frame, int timeoutMs,

@@ -50,6 +50,7 @@
 #include "cmd_parser.hpp"
 #include "color_mask.hpp"
 #include "lensing_worker.hpp"
+#include "session_setup_dialog.hpp"
 #include "segmentation_worker.hpp"
 #include "settings.hpp"
 #include "settings_dialog.hpp"
@@ -186,6 +187,14 @@ int main(int argc, char **argv) {
     savedSettings.setValue("flip", false);
     savedSettings.setValue("settingsVersion", 1);
   }
+#ifdef __APPLE__
+  if (settingsVersion < 2 && appSettings.backgroundsDir == "backgrounds/") {
+    appSettings.backgroundsDir = AppSettings().backgroundsDir;
+    savedSettings.setValue(
+        "backgroundsDir", QString::fromStdString(appSettings.backgroundsDir));
+    savedSettings.setValue("settingsVersion", 2);
+  }
+#endif
 
   CommandLineOptions opts = CommandLineOptions::parse(app, appSettings);
   appSettings.nthreads = opts.nthreads;
@@ -195,9 +204,10 @@ int main(int argc, char **argv) {
   appSettings.fps = opts.fps;
   appSettings.debugGrid = opts.debugGrid;
   appSettings.padFactor = opts.padFactor;
-  appSettings.modelSize = opts.modelSize;
+  appSettings.visionSize = opts.visionSize;
   appSettings.temporalSmooth = opts.temporalSmooth;
   appSettings.lowerRes = opts.lowerRes;
+  appSettings.personSensitivity = opts.personSensitivity;
   appSettings.qualityMode = opts.qualityMode;
   appSettings.secondsPerBackground = opts.secondsPerBackground;
   appSettings.distortInside = opts.distortInside;
@@ -205,7 +215,6 @@ int main(int argc, char **argv) {
   appSettings.selectROI = opts.selectROI;
   appSettings.maskMode = opts.maskMode;
   appSettings.colorModeType = opts.colorModeType;
-  appSettings.modelPath = opts.modelPath;
 
   SessionSelections sessionSelections;
   const auto loadSessionSelections = [&](QSettings &settings) {
@@ -223,27 +232,33 @@ int main(int argc, char **argv) {
   loadSessionSelections(savedSettings);
 
   {
-    SettingsDialog startupDialog(appSettings, "Session Setup",
-                                 "Start Session",
-                                 sessionSelections.hue,
-                                 sessionSelections.sat,
-                                 sessionSelections.val,
-                                 sessionSelections.hasColorTarget,
-                                 sessionSelections.hasROI,
-                                 sessionSelections.roiRect.x,
-                                 sessionSelections.roiRect.y,
-                                 sessionSelections.roiRect.width,
-                                 sessionSelections.roiRect.height);
+    SessionSetupDialog startupDialog(
+        appSettings, sessionSelections.hue, sessionSelections.sat,
+        sessionSelections.val, sessionSelections.hasColorTarget,
+        sessionSelections.hasROI);
     if (startupDialog.exec() != QDialog::Accepted) {
       return 0;
     }
     appSettings = startupDialog.settings();
+    if (startupDialog.colorPickRequested()) {
+      sessionSelections.hasColorTarget = true;
+      sessionSelections.hue = startupDialog.pickedHue();
+      sessionSelections.sat = startupDialog.pickedSat();
+      sessionSelections.val = startupDialog.pickedVal();
+    }
+    if (startupDialog.colorFramePickRequested())
+      sessionSelections.hasColorTarget = false;
   }
 
   fftwf_init_threads();
 
   Backgrounds *backgrounds =
-      initBackgrounds(appSettings.backgroundsDir);
+      initBackgrounds(appSettings.backgroundsDir,
+                      appSettings.backgroundWidth,
+                      appSettings.backgroundHeight,
+                      appSettings.backgroundFitMode,
+                      appSettings.rebuildBackgroundCache);
+  appSettings.rebuildBackgroundCache = false;
   ViewPort *vp = initViewport(backgrounds, appSettings, appSettings.debugGrid);
 
   AppSettings activeSettings = appSettings;
@@ -257,13 +272,58 @@ int main(int argc, char **argv) {
   QTimer *bgTimer = nullptr;
   QMetaObject::Connection frameToSegConnection;
   QMetaObject::Connection frameToColorConnection;
-#ifdef __APPLE__
-  QMetaObject::Connection frameToAppleSegConnection;
-#endif
   bool personModeAvailable = false;
   ActiveMaskMode activeMaskMode = ActiveMaskMode::Person;
   std::function<void(ActiveMaskMode)> setActiveMaskMode;
   std::function<void()> updatePreviewPolicy;
+  int renderedFrames = 0;
+  int performanceWindows = 0;
+  int lowPerformanceWindows = 0;
+  bool performanceWarningShown = false;
+
+  auto *performanceTimer = new QTimer(vp);
+  performanceTimer->setInterval(5000);
+  QObject::connect(performanceTimer, &QTimer::timeout, vp, [&]() {
+    if (lensWorker == nullptr || camFeed == nullptr ||
+        QApplication::applicationState() != Qt::ApplicationActive ||
+        QApplication::activeModalWidget() != nullptr) {
+      renderedFrames = 0;
+      lowPerformanceWindows = 0;
+      return;
+    }
+    const double actualFps = renderedFrames / 5.0;
+    const double expectedFps =
+        std::min(static_cast<double>(activeSettings.fps), camFeed->actualFps());
+    renderedFrames = 0;
+    if (++performanceWindows <= 2 || performanceWarningShown)
+      return;
+
+    if (expectedFps > 0.0 && actualFps < expectedFps * 0.55)
+      ++lowPerformanceWindows;
+    else
+      lowPerformanceWindows = 0;
+
+    if (lowPerformanceWindows < 3)
+      return;
+
+    performanceWarningShown = true;
+    const AppSettings effective = activeSettings.withQualityModeApplied();
+    QMessageBox::warning(
+        vp, "Performance Below Target",
+        QString("The effect is averaging about %1 fps, below the camera's %2 "
+                "fps. Background output is %3 x %4 and internal calculation "
+                "size is about %5 x %6.\n\nTry Fast quality first. You can also "
+                "lower background resolution or camera frame rate.")
+            .arg(actualFps, 0, 'f', 1)
+            .arg(expectedFps, 0, 'f', 1)
+            .arg(activeSettings.backgroundWidth)
+            .arg(activeSettings.backgroundHeight)
+            .arg(static_cast<int>(activeSettings.backgroundWidth *
+                                  effective.lowerRes))
+            .arg(static_cast<int>(activeSettings.backgroundHeight *
+                                  effective.lowerRes)));
+  });
+  performanceTimer->start();
 
   const auto saveSessionSelections = [&](QSettings &settings) {
     settings.setValue("session/hasColorTarget", sessionSelections.hasColorTarget);
@@ -297,7 +357,7 @@ int main(int argc, char **argv) {
     //    This is safe because frame→worker connections are DirectConnection
     //    and the remaining steps gate work before teardown continues.
     // 2. disconnect signals – prevents any *future* camera-thread
-    //    invocations of submitFrame / submitAppleFrame reaching the
+    //    invocations of submitAppleFrame reaching the
     //    segmentation worker after this point.
     // 3. beginShutdown (BlockingQueuedConnection) – blocks the main
     //    thread until the mask thread has set shuttingDown_ and cleared
@@ -317,10 +377,6 @@ int main(int argc, char **argv) {
       QObject::disconnect(frameToSegConnection);
     if (frameToColorConnection)
       QObject::disconnect(frameToColorConnection);
-#ifdef __APPLE__
-    if (frameToAppleSegConnection)
-      QObject::disconnect(frameToAppleSegConnection);
-#endif
 
     if (segWorker != nullptr) {
       QMetaObject::invokeMethod(segWorker, &SegmentationWorker::beginShutdown,
@@ -367,9 +423,6 @@ int main(int argc, char **argv) {
     personModeAvailable = false;
     frameToSegConnection = QMetaObject::Connection();
     frameToColorConnection = QMetaObject::Connection();
-#ifdef __APPLE__
-    frameToAppleSegConnection = QMetaObject::Connection();
-#endif
     updatePreviewPolicy = nullptr;
   };
 
@@ -379,9 +432,9 @@ int main(int argc, char **argv) {
     }
 
     QObject::connect(worker, &SegmentationWorker::maskReady, lensWorker,
-                     [lensWorker](const cv::Mat &mask) {
+                     [lensWorker](const cv::Mat &mask, quint64 seq) {
                        if (lensWorker)
-                         lensWorker->submitMask(mask);
+                         lensWorker->submitMask(mask, seq);
                      },
                      Qt::DirectConnection);
     QObject::connect(backgrounds, &Backgrounds::backgroundChanged, worker,
@@ -398,17 +451,15 @@ int main(int argc, char **argv) {
       return personModeAvailable;
     }
 
-    const int nfftThreads = std::max(1, activeSettings.nthreads - 3);
     const AppSettings effectiveSettings = activeSettings.withQualityModeApplied();
     SegmentationWorker *newSegWorker =
-        new SegmentationWorker(effectiveSettings.modelPath,
-                               effectiveSettings.modelSize, nfftThreads,
+        new SegmentationWorker(effectiveSettings.visionSize,
                                effectiveSettings.temporalSmooth,
                                effectiveSettings.lowerRes,
-                               effectiveSettings.visionQualityMode());
-    if (!newSegWorker->isModelLoaded()) {
-      reportError("Failed to load segmentation model from " +
-                  activeSettings.modelPath);
+                               effectiveSettings.visionQualityMode(),
+                               effectiveSettings.personSensitivity);
+    if (!newSegWorker->isReady()) {
+      reportError("Apple Vision person segmentation is unavailable");
       delete newSegWorker;
       return false;
     }
@@ -429,33 +480,40 @@ int main(int argc, char **argv) {
                                  const SessionSelections &selections,
                                  bool isReconfigure = false) -> bool {
     const AppSettings effectiveSettings = settings.withQualityModeApplied();
-    const int nfftThreads = std::max(1, settings.nthreads - 3);
-    fftwf_plan_with_nthreads(nfftThreads);
+    renderedFrames = 0;
+    performanceWindows = 0;
+    lowPerformanceWindows = 0;
+    performanceWarningShown = false;
+    fftwf_plan_with_nthreads(settings.nthreads);
 
     // On a reconfigure we never auto-open the blocking ROI selector,
     // even when the saved setting says selectROI is true.
     const bool showROI = settings.selectROI && !isReconfigure;
 
     CameraFeed *newCamFeed = new CameraFeed(settings.deviceIndex, settings.flip,
-                                            showROI, settings.fps);
+                                             showROI, settings.fps,
+                                             settings.cameraWidth,
+                                             settings.cameraHeight);
     if (!newCamFeed->isOpen()) {
       delete newCamFeed;
       return false;
     }
+    vp->setWindowTitle(
+        QString("GravyLensing - Camera %1 x %2 at %3 fps")
+            .arg(newCamFeed->actualWidth())
+            .arg(newCamFeed->actualHeight())
+            .arg(newCamFeed->actualFps(), 0, 'f', 1));
 
     SegmentationWorker *newSegWorker = nullptr;
     bool newPersonModeAvailable = false;
     if (settings.maskMode == "person") {
-      newSegWorker = new SegmentationWorker(effectiveSettings.modelPath,
-                                            effectiveSettings.modelSize,
-                                            nfftThreads,
-                                            effectiveSettings.temporalSmooth,
-                                            effectiveSettings.lowerRes,
-                                            effectiveSettings.visionQualityMode());
-      newPersonModeAvailable = newSegWorker->isModelLoaded();
+      newSegWorker = new SegmentationWorker(
+          effectiveSettings.visionSize, effectiveSettings.temporalSmooth,
+          effectiveSettings.lowerRes, effectiveSettings.visionQualityMode(),
+          effectiveSettings.personSensitivity);
+      newPersonModeAvailable = newSegWorker->isReady();
       if (!newPersonModeAvailable) {
-        reportError("Failed to load segmentation model from " +
-                    settings.modelPath);
+        reportError("Apple Vision person segmentation is unavailable");
         delete newSegWorker;
         delete newCamFeed;
         return false;
@@ -476,12 +534,18 @@ int main(int argc, char **argv) {
     newColorWorker->setTrackedBlobMode(settings.colorModeType == "tracked_blob");
     newColorWorker->setTolerances(settings.colorHueTol, settings.colorSatTol,
                                   settings.colorValTol);
+    newColorWorker->setTrackingTuning(
+        settings.colorMinObjectArea, settings.colorPersistenceFrames,
+        settings.colorMaskSmooth);
 
     LensingWorker *newLensWorker =
         new LensingWorker(settings.strength, settings.softening,
-                          settings.padFactor, nfftThreads,
-                          effectiveSettings.lowerRes, settings.distortInside,
-                          effectiveSettings.lensMassBlurSigma());
+                           settings.padFactor, settings.nthreads,
+                           effectiveSettings.lowerRes, settings.distortInside,
+                           effectiveSettings.lensMassBlurSigma());
+    QObject::connect(newLensWorker, &LensingWorker::lensedReady, vp,
+                     [&renderedFrames](const cv::Mat &) { ++renderedFrames; },
+                     Qt::QueuedConnection);
 
     QThread *newMaskThread = new QThread;
     QThread *newLensThread = new QThread;
@@ -525,8 +589,9 @@ int main(int argc, char **argv) {
 
     if (newSegWorker != nullptr) {
       QObject::connect(newSegWorker, &SegmentationWorker::maskReady,
-                       newLensWorker, [newLensWorker](const cv::Mat &mask) {
-                         newLensWorker->submitMask(mask);
+                       newLensWorker,
+                       [newLensWorker](const cv::Mat &mask, quint64 seq) {
+                         newLensWorker->submitMask(mask, seq);
                        },
                        Qt::DirectConnection);
       QObject::connect(backgrounds, &Backgrounds::backgroundChanged,
@@ -621,13 +686,12 @@ int main(int argc, char **argv) {
     personModeAvailable = newPersonModeAvailable;
 
     updatePreviewPolicy = [&]() {
-#ifdef __APPLE__
       if (camFeed == nullptr) {
         return;
       }
       const bool useNativeOnlyPersonPath =
           activeMaskMode == ActiveMaskMode::Person && segWorker != nullptr &&
-          segWorker->usesAppleVision() && !activeSettings.debugGrid;
+          !activeSettings.debugGrid && !activeSettings.showLensContents;
       QMetaObject::invokeMethod(
           camFeed,
           [camFeed, enablePreview = !useNativeOnlyPersonPath]() {
@@ -636,14 +700,13 @@ int main(int argc, char **argv) {
             }
           },
           Qt::QueuedConnection);
-#endif
     };
 
     setActiveMaskMode = [&](ActiveMaskMode mode) {
-      activeMaskMode = mode;
       if (mode == ActiveMaskMode::Person && !ensurePersonWorkerLoaded()) {
         return;
       }
+      activeMaskMode = mode;
 
       const bool enablePerson = mode == ActiveMaskMode::Person;
       const bool enableColor = mode == ActiveMaskMode::Color;
@@ -652,33 +715,15 @@ int main(int argc, char **argv) {
         QObject::disconnect(frameToSegConnection);
       if (frameToColorConnection)
         QObject::disconnect(frameToColorConnection);
-#ifdef __APPLE__
-      if (frameToAppleSegConnection)
-        QObject::disconnect(frameToAppleSegConnection);
-#endif
 
       if (enablePerson && segWorker != nullptr) {
-#ifdef __APPLE__
-        if (segWorker->usesAppleVision()) {
-          frameToAppleSegConnection = QObject::connect(
-              camFeed, &CameraFeed::framePairCaptured, segWorker,
-              [segWorker](const cv::Mat &frame,
-                          const AppleVideoFrame &nativeFrame) {
-                segWorker->submitAppleFrame(nativeFrame, frame);
-              },
-              Qt::DirectConnection);
-        } else {
-          frameToSegConnection = QObject::connect(
-              camFeed, &CameraFeed::frameCaptured, segWorker,
-              [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
-              Qt::DirectConnection);
-        }
-#else
         frameToSegConnection = QObject::connect(
-            camFeed, &CameraFeed::frameCaptured, segWorker,
-            [segWorker](const cv::Mat &frame) { segWorker->submitFrame(frame); },
+            camFeed, &CameraFeed::framePairCaptured, segWorker,
+            [segWorker](const cv::Mat &frame,
+                        const AppleVideoFrame &nativeFrame, quint64 seq) {
+              segWorker->submitAppleFrame(nativeFrame, frame, seq);
+            },
             Qt::DirectConnection);
-#endif
       }
       if (enableColor) {
         frameToColorConnection = QObject::connect(
@@ -777,10 +822,19 @@ int main(int argc, char **argv) {
                       QSettings s;
                      activeSettings.save(s);
                      saveSessionSelections(s);
-                   });
+                    });
 
-  QObject::connect(vp, &ViewPort::backgroundIndexSelected, backgrounds,
-                   &Backgrounds::setIndex);
+  QObject::connect(vp, &ViewPort::showLensContentsToggled, vp,
+                   [vp, &activeSettings, &saveSessionSelections,
+                    &updatePreviewPolicy](bool enabled) {
+                     activeSettings.showLensContents = enabled;
+                     vp->setSettings(activeSettings);
+                     if (updatePreviewPolicy)
+                       updatePreviewPolicy();
+                     QSettings s;
+                     activeSettings.save(s);
+                     saveSessionSelections(s);
+                   });
 
   QObject::connect(vp, &ViewPort::selectROIRequested, vp, [&]() {
     if (camFeed == nullptr || camThread == nullptr) {
@@ -809,6 +863,15 @@ int main(int argc, char **argv) {
     camThread->start();
   });
 
+  QObject::connect(vp, &ViewPort::clearROIRequested, vp, [&]() {
+    sessionSelections.hasROI = false;
+    sessionSelections.roiRect = cv::Rect();
+    sessionSelections.roiMask.release();
+    if (camFeed != nullptr)
+      camFeed->clearROI();
+    vp->setROIState(false, 0, 0, 0, 0);
+  });
+
   QObject::connect(vp, &ViewPort::selectColorRequested, vp, [&]() {
     if (colorWorker == nullptr || !setActiveMaskMode)
       return;
@@ -821,32 +884,67 @@ int main(int argc, char **argv) {
                               Qt::QueuedConnection);
   });
 
-  QObject::connect(vp, &ViewPort::toggleMaskModeRequested, vp, [&]() {
-    if (!segWorker || !colorWorker || !setActiveMaskMode)
+  const auto requestMaskMode = [&](ActiveMaskMode requestedMode) {
+    if (!colorWorker || !setActiveMaskMode || activeMaskMode == requestedMode)
       return;
 
-    if (activeMaskMode == ActiveMaskMode::Color) {
-      if (!personModeAvailable) {
-        reportError("Person mode is unavailable because the segmentation "
-                    "model failed to load");
-        return;
-      }
-      setActiveMaskMode(ActiveMaskMode::Person);
-      activeSettings.maskMode = "person";
-      vp->setSettings(activeSettings);
-      QSettings s;
-      activeSettings.save(s);
-      saveSessionSelections(s);
+    setActiveMaskMode(requestedMode);
+    if (activeMaskMode != requestedMode)
       return;
-    }
-
-    setActiveMaskMode(ActiveMaskMode::Color);
-    activeSettings.maskMode = "color";
+    activeSettings.maskMode = requestedMode == ActiveMaskMode::Color
+                                  ? "color"
+                                  : "person";
     vp->setSettings(activeSettings);
     QSettings s;
     activeSettings.save(s);
     saveSessionSelections(s);
+  };
+
+  QObject::connect(vp, &ViewPort::toggleMaskModeRequested, vp, [&]() {
+    requestMaskMode(activeMaskMode == ActiveMaskMode::Color
+                        ? ActiveMaskMode::Person
+                        : ActiveMaskMode::Color);
   });
+  QObject::connect(vp, &ViewPort::maskModeRequested, vp,
+                   [&](bool colorMode) {
+                     requestMaskMode(colorMode ? ActiveMaskMode::Color
+                                               : ActiveMaskMode::Person);
+                   });
+
+  int lastBackgroundInterval =
+      activeSettings.secondsPerBackground > 0
+          ? activeSettings.secondsPerBackground
+          : 10;
+  const auto setBackgroundCycleInterval = [&](int seconds) {
+    if (bgTimer != nullptr) {
+      bgTimer->stop();
+      delete bgTimer;
+      bgTimer = nullptr;
+    }
+    activeSettings.secondsPerBackground = seconds;
+    if (seconds > 0) {
+      lastBackgroundInterval = seconds;
+      bgTimer = new QTimer(vp);
+      QObject::connect(bgTimer, &QTimer::timeout, backgrounds,
+                       &Backgrounds::next);
+      bgTimer->start(seconds * 1000);
+    }
+    vp->setSettings(activeSettings);
+    QSettings s;
+    activeSettings.save(s);
+    saveSessionSelections(s);
+  };
+
+  QObject::connect(vp, &ViewPort::backgroundAutoCycleToggled, vp,
+                   [&](bool enabled) {
+                     setBackgroundCycleInterval(enabled
+                                                    ? lastBackgroundInterval
+                                                    : -1);
+                   });
+  QObject::connect(vp, &ViewPort::backgroundIntervalRequested, vp,
+                   [&](int seconds) {
+                     setBackgroundCycleInterval(seconds);
+                   });
 
   // ── Session restart handler ────────────────────────────────────────
   // Triggered by the Session Settings dialog.  Preserves the current
@@ -861,9 +959,19 @@ int main(int argc, char **argv) {
                         return;
                       }
 
-                      const AppSettings previousSettings = activeSettings;
-                      const SessionSelections previousSelections =
-                          sessionSelections;
+                       const AppSettings previousSettings = activeSettings;
+                       const SessionSelections previousSelections =
+                           sessionSelections;
+                        const bool backgroundsChanged =
+                            newSettings.backgroundsDir !=
+                                previousSettings.backgroundsDir ||
+                            newSettings.backgroundWidth !=
+                                previousSettings.backgroundWidth ||
+                            newSettings.backgroundHeight !=
+                                previousSettings.backgroundHeight ||
+                            newSettings.backgroundFitMode !=
+                                previousSettings.backgroundFitMode ||
+                            newSettings.rebuildBackgroundCache;
                        const bool actuallySwitchedToColor =
                            previousSettings.maskMode != "color" &&
                            newSettings.maskMode == "color";
@@ -887,7 +995,24 @@ int main(int argc, char **argv) {
                        // live handlers (reselection lambda, ROI handler).
                       // No need to BlockingQueuedConnection-query workers.
 
-                      stopPipeline();
+                       if (backgroundsChanged &&
+                           !backgrounds->setSource(
+                               newSettings.backgroundsDir,
+                               newSettings.backgroundWidth,
+                               newSettings.backgroundHeight,
+                               newSettings.backgroundFitMode,
+                               newSettings.rebuildBackgroundCache)) {
+                         QMessageBox::warning(
+                             vp, "Backgrounds Not Changed",
+                             "No supported images could be loaded from the "
+                             "selected directory.");
+                         vp->setSettings(previousSettings);
+                         return;
+                       }
+                       if (backgroundsChanged)
+                         vp->setBackgroundImages(backgrounds);
+
+                       stopPipeline();
 
                       if (!startPipeline(newSettings, sessionSelections,
                                          /*isReconfigure=*/true)) {
@@ -896,9 +1021,18 @@ int main(int argc, char **argv) {
                             "The new settings could not be applied. Restoring "
                             "the previous working configuration.");
 
-                        sessionSelections = previousSelections;
+                         sessionSelections = previousSelections;
 
-                        if (!startPipeline(previousSettings, previousSelections,
+                         if (backgroundsChanged) {
+                           backgrounds->setSource(
+                               previousSettings.backgroundsDir,
+                               previousSettings.backgroundWidth,
+                               previousSettings.backgroundHeight,
+                               previousSettings.backgroundFitMode);
+                           vp->setBackgroundImages(backgrounds);
+                         }
+
+                         if (!startPipeline(previousSettings, previousSelections,
                                            true)) {
                           QMessageBox::critical(
                               vp, "Fatal Configuration Error",
@@ -913,7 +1047,9 @@ int main(int argc, char **argv) {
                        return;
                      }
 
-                      activeSettings = newSettings;
+                       activeSettings = newSettings;
+                       activeSettings.rebuildBackgroundCache = false;
+                       vp->setSettings(activeSettings);
                       vp->setColorTarget(sessionSelections.hue,
                                           sessionSelections.sat,
                                           sessionSelections.val,

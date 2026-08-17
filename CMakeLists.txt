@@ -1,6 +1,11 @@
 # Minimum required CMake version and project definition
 cmake_minimum_required(VERSION 3.10)
-project(GravyLensing LANGUAGES CXX)
+set(GRAVY_VERSION "1.0.0" CACHE STRING "GravyLensing release version")
+project(GravyLensing VERSION ${GRAVY_VERSION} LANGUAGES CXX)
+
+if(NOT APPLE)
+  message(FATAL_ERROR "GravyLensing requires macOS because person detection uses Apple Vision.")
+endif()
 
 # Set C++ standard to C++17
 set(CMAKE_CXX_STANDARD 17)
@@ -26,6 +31,18 @@ if(APPLE)
     "/opt/homebrew/opt/libomp"
     "/usr/local/opt/libomp"
   )
+  find_library(HOMEBREW_LIBOMP
+    NAMES omp
+    PATHS
+      /opt/homebrew/opt/libomp/lib
+      /usr/local/opt/libomp/lib
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+  # OpenCV reaches this runtime through OpenBLAS. Linking LLVM's separate copy
+  # as well causes OpenMP error #15 and aborts when processing starts.
+  set(OpenMP_omp_LIBRARY "${HOMEBREW_LIBOMP}" CACHE FILEPATH
+      "OpenMP runtime shared with Homebrew dependencies" FORCE)
 endif()
 
 # Find and enable OpenMP
@@ -94,11 +111,13 @@ set(FFTW3_LIBRARIES
 # Other dependencies
 
 # OpenCV for image processing
-find_package(OpenCV REQUIRED)
+if(APPLE)
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+else()
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui videoio)
+endif()
 # Portable threading library
 find_package(Threads REQUIRED)
-# LibTorch (PyTorch C++ API)
-find_package(Torch REQUIRED)
 # Qt6 Widgets for GUI
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
@@ -120,7 +139,6 @@ include_directories("${CMAKE_SOURCE_DIR}/src")
 # Third-party includes
 include_directories(
   ${OpenCV_INCLUDE_DIRS}
-  ${TORCH_INCLUDE_DIRS}
 )
 
 # ============================================================================
@@ -135,6 +153,7 @@ set(SOURCES
   src/viewport.cpp
   src/cam_feed.cpp
   src/backgrounds.cpp
+  src/session_setup_dialog.cpp
   src/settings_dialog.cpp
 )
 
@@ -156,13 +175,36 @@ endif()
 # Define the executable target
 add_executable(gravy_lens ${SOURCES})
 
+if(APPLE)
+  file(GLOB BACKGROUND_RESOURCES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/backgrounds/*.tiff")
+  target_sources(gravy_lens PRIVATE ${BACKGROUND_RESOURCES})
+  set_source_files_properties(${BACKGROUND_RESOURCES} PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources/backgrounds")
+  target_sources(gravy_lens PRIVATE LICENSE)
+  set_source_files_properties(LICENSE PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources")
+endif()
+
 # Link OpenMP target (automatically adds appropriate compile & link flags)
 target_link_libraries(gravy_lens PRIVATE OpenMP::OpenMP_CXX)
 
-# Place build output (binaries) one level above the build directory
-set_target_properties(gravy_lens PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.."
-)
+if(APPLE)
+  set_target_properties(gravy_lens PROPERTIES
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist.in"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.willroper.gravylensing"
+    MACOSX_BUNDLE_BUNDLE_NAME "GravyLensing"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    OSX_ARCHITECTURES "arm64"
+    OUTPUT_NAME "GravyLensing"
+  )
+else()
+  set_target_properties(gravy_lens PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.."
+  )
+endif()
 
 # ============================================================================
 # Linker settings
@@ -174,7 +216,6 @@ target_link_libraries(gravy_lens PRIVATE
   ${OpenCV_LIBS}
   Threads::Threads
   ${FFTW3_LIBRARIES}
-  ${TORCH_LIBRARIES}
 )
 
 if(APPLE)
@@ -197,8 +238,8 @@ set_property(TARGET gravy_lens PROPERTY ENABLE_EXPORTS ON)
 # ============================================================================
 # Installation
 
-# Install the executable into the 'bin' directory of the install prefix
-install(TARGETS gravy_lens RUNTIME DESTINATION bin)
+# Install the executable into the platform's standard destination.
+install(TARGETS gravy_lens BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 
 # ============================================================================
 # Unit tests
@@ -232,4 +273,18 @@ if(BUILD_TESTS)
 
   enable_testing()
   add_test(NAME color_mask COMMAND test_color_mask)
+
+  add_executable(test_backgrounds
+    src/backgrounds.cpp
+    tests/test_backgrounds.cpp
+  )
+  target_link_libraries(test_backgrounds PRIVATE
+    Qt6::Core
+    ${OpenCV_LIBS}
+  )
+  add_test(NAME backgrounds COMMAND test_backgrounds)
+
+  add_executable(test_settings tests/test_settings.cpp)
+  target_link_libraries(test_settings PRIVATE Qt6::Core)
+  add_test(NAME settings COMMAND test_settings)
 endif()
