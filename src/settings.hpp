@@ -75,6 +75,8 @@ struct AppSettings {
   float temporalSmooth = 0.25f; // Frame blending factor (0–1)
   int personSensitivity = 50;   // Detection sensitivity (0 strict, 100 sensitive)
   std::string qualityMode = "balanced"; // fast, balanced, high, custom
+  bool focusModeEnabled = false;      // Track/keep only the largest person group
+  float focusGroupDistance = 0.15f;   // Merge distance, fraction of frame width
 
   // ── Runtime ────────────────────────────────────────────────────────
   bool debugGrid = false;       // Show 2x2 diagnostic view
@@ -107,6 +109,8 @@ struct AppSettings {
            temporalSmooth == other.temporalSmooth &&
            personSensitivity == other.personSensitivity &&
            qualityMode == other.qualityMode &&
+           focusModeEnabled == other.focusModeEnabled &&
+           focusGroupDistance == other.focusGroupDistance &&
            secondsPerBackground == other.secondsPerBackground &&
            distortInside == other.distortInside && flip == other.flip &&
            selectROI == other.selectROI && maskMode == other.maskMode &&
@@ -150,6 +154,9 @@ struct AppSettings {
         s.value("personSensitivity", personSensitivity).toInt();
     qualityMode =
         s.value("qualityMode", QString::fromStdString(qualityMode)).toString().toStdString();
+    focusModeEnabled = s.value("focusModeEnabled", focusModeEnabled).toBool();
+    focusGroupDistance =
+        s.value("focusGroupDistance", focusGroupDistance).toFloat();
     secondsPerBackground =
         s.value("secondsPerBackground", secondsPerBackground).toInt();
     distortInside = s.value("distortInside", distortInside).toBool();
@@ -198,6 +205,8 @@ struct AppSettings {
     s.setValue("temporalSmooth", temporalSmooth);
     s.setValue("personSensitivity", personSensitivity);
     s.setValue("qualityMode", QString::fromStdString(qualityMode));
+    s.setValue("focusModeEnabled", focusModeEnabled);
+    s.setValue("focusGroupDistance", focusGroupDistance);
     s.setValue("secondsPerBackground", secondsPerBackground);
     s.setValue("distortInside", distortInside);
     s.setValue("flip", flip);

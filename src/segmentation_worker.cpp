@@ -25,6 +25,8 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <numeric>
+#include <unordered_map>
 
 // Local includes
 #include "vision_segmentation_helper.hpp"
@@ -42,7 +44,9 @@ double elapsedMs(const std::chrono::steady_clock::time_point &start,
 void refineSoftPersonMask(const cv::Mat &personProb, const cv::Mat &guidanceFrame,
                           cv::Mat &refinedProb, cv::Mat &binaryMask,
                           float onThreshold, float offThreshold,
-                          int minBlobArea) {
+                          int minBlobArea, bool focusModeEnabled,
+                          int focusMergeDistancePx, cv::Rect &focusGroupBBox,
+                          float &focusGroupArea, bool &haveFocusGroup) {
   static const cv::Mat kGrowKernel =
       cv::getStructuringElement(cv::MORPH_ELLIPSE, {3, 3});
   static constexpr int kWeakGrowIterations = 4;
@@ -126,21 +130,141 @@ void refineSoftPersonMask(const cv::Mat &personProb, const cv::Mat &guidanceFram
       binaryMask, labels, stats, centroids, 8, CV_32S);
   binaryMask.setTo(cv::Scalar(0));
 
+  struct Blob {
+    int label;
+    cv::Rect bbox;
+    int area;
+  };
+  std::vector<Blob> keptBlobs;
+  keptBlobs.reserve(componentCount);
+
   for (int label = 1; label < componentCount; ++label) {
     const int x = stats.at<int>(label, cv::CC_STAT_LEFT);
     const int y = stats.at<int>(label, cv::CC_STAT_TOP);
     const int width = stats.at<int>(label, cv::CC_STAT_WIDTH);
     const int height = stats.at<int>(label, cv::CC_STAT_HEIGHT);
+    const int area = stats.at<int>(label, cv::CC_STAT_AREA);
     const bool touchesBorder =
         x == 0 || y == 0 || (x + width) >= binaryMask.cols ||
         (y + height) >= binaryMask.rows;
     const int effectiveMinBlobArea =
         touchesBorder ? std::max(1, minBlobArea / 3) : minBlobArea;
-    if (stats.at<int>(label, cv::CC_STAT_AREA) < effectiveMinBlobArea) {
+    if (area < effectiveMinBlobArea) {
       continue;
     }
-    cv::Mat componentMask = labels == label;
-    cv::bitwise_or(binaryMask, componentMask, binaryMask);
+    keptBlobs.push_back({label, cv::Rect(x, y, width, height), area});
+  }
+
+  if (!focusModeEnabled || keptBlobs.size() <= 1) {
+    for (const auto &blob : keptBlobs) {
+      cv::bitwise_or(binaryMask, labels == blob.label, binaryMask);
+    }
+    if (focusModeEnabled) {
+      // Keep the tracked-group state in sync even with 0/1 blobs so a later
+      // frame's continuity check has a sane baseline to compare against.
+      if (keptBlobs.size() == 1) {
+        focusGroupBBox = keptBlobs[0].bbox;
+        focusGroupArea = static_cast<float>(keptBlobs[0].area);
+        haveFocusGroup = true;
+      } else {
+        haveFocusGroup = false;
+      }
+    }
+  } else {
+    // Focus mode with 2+ blobs: cluster them by bounding-box proximity
+    // (union-find on a gap distance), then keep only the largest cluster —
+    // everyone else is dropped from the mask entirely.  A cluster that
+    // overlaps the previously tracked group is preferred over a same-frame
+    // rival unless the rival is decisively bigger, so the tracked group
+    // doesn't flicker between two similarly-sized clusters.
+    std::vector<int> parent(keptBlobs.size());
+    std::iota(parent.begin(), parent.end(), 0);
+    auto find = [&](int i) {
+      while (parent[i] != i) {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+      }
+      return i;
+    };
+    auto unite = [&](int a, int b) {
+      a = find(a);
+      b = find(b);
+      if (a != b) {
+        parent[a] = b;
+      }
+    };
+    auto bboxGap = [](const cv::Rect &a, const cv::Rect &b) {
+      const int dx =
+          std::max({a.x - (b.x + b.width), b.x - (a.x + a.width), 0});
+      const int dy =
+          std::max({a.y - (b.y + b.height), b.y - (a.y + a.height), 0});
+      return std::max(dx, dy);
+    };
+    for (size_t i = 0; i < keptBlobs.size(); ++i) {
+      for (size_t j = i + 1; j < keptBlobs.size(); ++j) {
+        if (bboxGap(keptBlobs[i].bbox, keptBlobs[j].bbox) <=
+            focusMergeDistancePx) {
+          unite(static_cast<int>(i), static_cast<int>(j));
+        }
+      }
+    }
+
+    struct Cluster {
+      cv::Rect bbox;
+      float area = 0.0f;
+      std::vector<int> memberLabels;
+    };
+    std::unordered_map<int, Cluster> clusters;
+    for (size_t i = 0; i < keptBlobs.size(); ++i) {
+      Cluster &c = clusters[find(static_cast<int>(i))];
+      c.bbox = c.memberLabels.empty() ? keptBlobs[i].bbox
+                                      : (c.bbox | keptBlobs[i].bbox);
+      c.area += static_cast<float>(keptBlobs[i].area);
+      c.memberLabels.push_back(keptBlobs[i].label);
+    }
+
+    // The tracked group keeps focus as long as it's still detected at all —
+    // no size contest against a rival cluster. We only hand off once the
+    // original genuinely vanishes (nothing this frame overlaps where it
+    // last was), which is when "continuing" comes back null. The overlap
+    // must cover a reasonable fraction of the original's last bbox, not
+    // just a corner touch, so a big unrelated cluster can't falsely claim
+    // continuity by grazing the old box.
+    const Cluster *continuing = nullptr;
+    const Cluster *largest = nullptr;
+    long bestOverlap = 0;
+    const long minContinuityOverlap =
+        haveFocusGroup
+            ? static_cast<long>(0.15f * static_cast<float>(focusGroupBBox.area()))
+            : 0;
+    for (const auto &entry : clusters) {
+      const Cluster &c = entry.second;
+      if (largest == nullptr || c.area > largest->area) {
+        largest = &c;
+      }
+      if (haveFocusGroup) {
+        const cv::Rect overlap = c.bbox & focusGroupBBox;
+        const long overlapArea = static_cast<long>(overlap.area());
+        if (overlapArea >= std::max<long>(1, minContinuityOverlap) &&
+            overlapArea > bestOverlap) {
+          bestOverlap = overlapArea;
+          continuing = &c;
+        }
+      }
+    }
+
+    const Cluster *winner = continuing != nullptr ? continuing : largest;
+
+    if (winner != nullptr) {
+      for (const int label : winner->memberLabels) {
+        cv::bitwise_or(binaryMask, labels == label, binaryMask);
+      }
+      focusGroupBBox = winner->bbox;
+      focusGroupArea = winner->area;
+      haveFocusGroup = true;
+    } else {
+      haveFocusGroup = false;
+    }
   }
 
   cv::morphologyEx(binaryMask, binaryMask, cv::MORPH_CLOSE,
@@ -270,10 +394,16 @@ static void computePixelMedian(const std::vector<cv::Mat> &history,
 SegmentationWorker::SegmentationWorker(int visionSize,
                                        float temporalSmooth, float lowerRes,
                                        const std::string &qualityMode,
-                                       int personSensitivity)
+                                       int personSensitivity,
+                                       bool focusModeEnabled,
+                                       float focusGroupDistance)
     : qualityMode_(qualityMode), fastW_(visionSize), fastH_(visionSize),
       lowerRes_(lowerRes),
-      temporalSmooth_(temporalSmooth) {
+      temporalSmooth_(temporalSmooth),
+      focusModeEnabled_(focusModeEnabled) {
+
+  focusMergeDistancePx_ =
+      static_cast<int>(std::round(focusGroupDistance * fastW_));
 
   const float sensitivity =
       static_cast<float>(std::clamp(personSensitivity, 0, 100)) / 100.0f;
@@ -507,7 +637,9 @@ void SegmentationWorker::applyPersonResult(VisionCompletion &&completion) {
                                            : completion.guidance;
   refineSoftPersonMask(prevPersonProb_, activeGuidanceFrame, refinedPersonProb_,
                        fastMask_,
-                       personOnThreshold_, personOffThreshold_, minBlobArea);
+                       personOnThreshold_, personOffThreshold_, minBlobArea,
+                       focusModeEnabled_, focusMergeDistancePx_,
+                       focusGroupBBox_, focusGroupArea_, haveFocusGroup_);
   auto stageEnd = std::chrono::steady_clock::now();
   cleanupPerf.addSample(elapsedMs(stageStart, stageEnd));
 
@@ -536,8 +668,20 @@ void SegmentationWorker::applyPersonResult(VisionCompletion &&completion) {
   {
     const bool enableVisionROIAcceleration =
         qualityMode_ == "fast" || qualityMode_ == "balanced";
-    const cv::Rect suggestedROI = paddedProbabilityBounds(
-        prevPersonProb_, 0.18f, visionROIPadding_, visionSize);
+    // In focus mode, track only the focus group's own bounds — bystanders
+    // outside it never grow the ROI or trigger a full-frame reset.
+    const auto padRect = [](cv::Rect r, int padding, cv::Size limit) {
+      r.x = std::max(0, r.x - padding);
+      r.y = std::max(0, r.y - padding);
+      r.width = std::min(limit.width - r.x, r.width + 2 * padding);
+      r.height = std::min(limit.height - r.y, r.height + 2 * padding);
+      return r;
+    };
+    const cv::Rect suggestedROI =
+        (focusModeEnabled_ && haveFocusGroup_)
+            ? padRect(focusGroupBBox_, visionROIPadding_, visionSize)
+            : paddedProbabilityBounds(prevPersonProb_, 0.18f,
+                                      visionROIPadding_, visionSize);
     const float suggestedROIMeanProb =
         meanProbabilityInRect(prevPersonProb_, suggestedROI);
     const float suggestedROIIoU =

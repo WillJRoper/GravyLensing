@@ -104,6 +104,8 @@ private:
   QSpinBox *padFactorSpin_;
   QDoubleSpinBox *temporalSmoothSpin_;
   QSlider *personSensitivitySlider_;
+  QCheckBox *focusModeCheck_;
+  QSlider *focusGroupDistanceSlider_;
   QCheckBox *distortInsideCheck_;
   QCheckBox *showLensContentsCheck_;
   QCheckBox *flipCheck_;

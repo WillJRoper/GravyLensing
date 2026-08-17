@@ -472,6 +472,42 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   connect(personSensitivitySlider_, &QSlider::valueChanged, this,
           updateSensitivityLabel);
 
+  focusModeCheck_ = new QCheckBox("Track main subject only");
+  focusModeCheck_->setChecked(settings.focusModeEnabled);
+  focusModeCheck_->setToolTip(
+      "Keep only the largest connected group of people in the mask; "
+      "bystanders elsewhere in frame are ignored. Turn off if people "
+      "entering the frame should always be included.");
+  addFormRow(personForm, "Focus mode", focusModeCheck_->toolTip(),
+             focusModeCheck_);
+
+  focusGroupDistanceSlider_ = new QSlider(Qt::Horizontal);
+  focusGroupDistanceSlider_->setRange(0, 30);
+  focusGroupDistanceSlider_->setValue(
+      static_cast<int>(std::round(settings.focusGroupDistance * 100.0f)));
+  focusGroupDistanceSlider_->setToolTip(
+      "How close two people need to be (as a fraction of frame width) to "
+      "count as the same group. Increase to keep small groups together.");
+  auto *focusDistanceLabel = new QLabel;
+  focusDistanceLabel->setMinimumWidth(40);
+  const auto updateFocusDistanceLabel = [focusDistanceLabel](int value) {
+    focusDistanceLabel->setText(QString("%1%").arg(value));
+  };
+  updateFocusDistanceLabel(focusGroupDistanceSlider_->value());
+  auto *focusDistanceRow = new QHBoxLayout;
+  focusDistanceRow->addWidget(focusGroupDistanceSlider_, 1);
+  focusDistanceRow->addWidget(focusDistanceLabel);
+  addFormRow(personForm, "Group distance",
+             focusGroupDistanceSlider_->toolTip(), focusDistanceRow);
+  connect(focusGroupDistanceSlider_, &QSlider::valueChanged, this,
+          updateFocusDistanceLabel);
+
+  personForm->setRowVisible(focusDistanceRow, settings.focusModeEnabled);
+  connect(focusModeCheck_, &QCheckBox::toggled, this,
+          [personForm, focusDistanceRow](bool checked) {
+            personForm->setRowVisible(focusDistanceRow, checked);
+          });
+
   subjectPage->addWidget(personGroup);
 
   const auto applyQualityPreset = [this](const QString &mode) {
@@ -1278,6 +1314,9 @@ AppSettings SettingsDialog::settings() const {
   s.temporalSmooth = static_cast<float>(temporalSmoothSpin_->value());
   s.lowerRes = static_cast<float>(lowerResSpin_->value());
   s.personSensitivity = personSensitivitySlider_->value();
+  s.focusModeEnabled = focusModeCheck_->isChecked();
+  s.focusGroupDistance =
+      static_cast<float>(focusGroupDistanceSlider_->value()) / 100.0f;
   s.backgroundsDir = includedBackgroundsRadio_->isChecked()
                          ? AppSettings().backgroundsDir
                          : backgroundsDirEdit_->text().toStdString();
