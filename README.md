@@ -6,23 +6,21 @@
 [![License: GPLv3](https://img.shields.io/github/license/WillJRoper/GravyLensing)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/WillJRoper/GravyLensing/total)](https://github.com/WillJRoper/GravyLensing/releases)
 
-A real-time gravitational lensing demo written in C++, supported by the
-Goodwood Festival of Speed Future Lab.
+A real-time gravitational lensing demo written in C++ for Apple Silicon Macs, supported by the Goodwood Festival of Speed Future Lab.
 
-GravyLensing takes a live camera feed, works out where the "mass" is in each
-frame — a person, or an object of a chosen colour — and uses an FFT-based
-deflection calculation to lens a background image around it, at camera frame
-rate.
+GravyLensing takes a live camera feed, works out where the "mass" is in each frame — a person, or an object of a chosen colour — and uses an FFT-based deflection calculation to lens a background image around it.
 
 ![SCR-20250429-qemj](https://github.com/user-attachments/assets/39f96883-53b8-4d13-b399-3d390bf4328f)
 
 ## Install
 
-Apple Silicon users can download the latest DMG from
+Users can download the latest DMG from
 [GitHub Releases](https://github.com/WillJRoper/gravy-lensing/releases), drag
 **GravyLensing** to **Applications**, and open it. Nothing else is required.
 
-To build from source on macOS:
+### Development installs 
+
+To build from source:
 
 ```bash
 brew install cmake fftw libomp opencv qt
@@ -59,9 +57,6 @@ make -C docs html
 
 Contributions, issues, and feature requests are welcome. Fork the repository
 and open a pull request.
-
-The signed macOS DMG is built by `packaging/package_macos.sh`; see
-[packaging/README.md](packaging/README.md).
 
 ## License
 
