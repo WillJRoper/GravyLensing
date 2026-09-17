@@ -53,7 +53,8 @@ public:
   SegmentationWorker(int visionSize = 512, float temporalSmooth = 0.6f,
                      float lowerRes = 1.0f,
                      const std::string &qualityMode = "balanced",
-                     int personSensitivity = 50);
+                     int personSensitivity = 50, bool focusModeEnabled = false,
+                     float focusGroupDistance = 0.15f);
   ~SegmentationWorker();
 
   bool isReady() const { return ready_; }
@@ -150,6 +151,15 @@ private:
   const int visionROIPadding_ = 32;
   const int visionMinROIDim_ = 192;
   const float visionMaxROIAreaFraction_ = 0.65f;
+
+  // Focus mode: track only the largest person-blob cluster, discarding
+  // everything else from the mask.  Reduces ROI thrash from bystanders and
+  // matches a "one presenter" lensing effect.
+  const bool focusModeEnabled_ = false;
+  int focusMergeDistancePx_ = 0; // computed from focusGroupDistance * fastW_
+  cv::Rect focusGroupBBox_;
+  float focusGroupArea_ = 0.0f;
+  bool haveFocusGroup_ = false;
 
 
 

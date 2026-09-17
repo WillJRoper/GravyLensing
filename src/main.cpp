@@ -457,7 +457,9 @@ int main(int argc, char **argv) {
                                effectiveSettings.temporalSmooth,
                                effectiveSettings.lowerRes,
                                effectiveSettings.visionQualityMode(),
-                               effectiveSettings.personSensitivity);
+                               effectiveSettings.personSensitivity,
+                               effectiveSettings.focusModeEnabled,
+                               effectiveSettings.focusGroupDistance);
     if (!newSegWorker->isReady()) {
       reportError("Apple Vision person segmentation is unavailable");
       delete newSegWorker;
@@ -510,7 +512,9 @@ int main(int argc, char **argv) {
       newSegWorker = new SegmentationWorker(
           effectiveSettings.visionSize, effectiveSettings.temporalSmooth,
           effectiveSettings.lowerRes, effectiveSettings.visionQualityMode(),
-          effectiveSettings.personSensitivity);
+          effectiveSettings.personSensitivity,
+          effectiveSettings.focusModeEnabled,
+          effectiveSettings.focusGroupDistance);
       newPersonModeAvailable = newSegWorker->isReady();
       if (!newPersonModeAvailable) {
         reportError("Apple Vision person segmentation is unavailable");
