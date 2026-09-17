@@ -1,6 +1,10 @@
 GravyLensing
 ^^^^^^^^^^^^
 
+.. image:: _static/gravylensing-logo.png
+   :alt: GravyLensing person lens logo
+   :width: 220px
+
 GravyLensing is a real-time gravitational lensing demo. It takes a live camera
 feed, works out where the "mass" is in each frame — a person, or an object of a
 chosen colour — and uses an FFT-based deflection calculation to lens a
