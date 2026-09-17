@@ -169,9 +169,44 @@ std::vector<std::string> AvFoundationCamera::availableDeviceNames() {
   return names;
 }
 
+AvFoundationCamera::Access AvFoundationCamera::accessStatus() {
+  switch ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]) {
+  case AVAuthorizationStatusAuthorized:
+    return Access::Granted;
+  case AVAuthorizationStatusNotDetermined:
+    return Access::Undecided;
+  default:
+    return Access::Denied;
+  }
+}
+
+bool AvFoundationCamera::requestAccess() {
+  if (accessStatus() == Access::Granted)
+    return true;
+  if (accessStatus() == Access::Denied)
+    return false;
+
+  // The completion handler runs on an internal queue, so blocking the caller
+  // here is safe: the prompt itself is drawn by another process.
+  __block bool granted = false;
+  dispatch_semaphore_t answered = dispatch_semaphore_create(0);
+  [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
+                           completionHandler:^(BOOL allowed) {
+                             granted = allowed;
+                             dispatch_semaphore_signal(answered);
+                           }];
+  dispatch_semaphore_wait(answered, DISPATCH_TIME_FOREVER);
+  return granted;
+}
+
 bool AvFoundationCamera::open(std::string &error, int desiredFps,
                               int desiredWidth, int desiredHeight) {
   close();
+
+  if (accessStatus() != Access::Granted) {
+    error = "Camera access has not been granted to GravyLensing";
+    return false;
+  }
 
   @autoreleasepool {
     NSArray<AVCaptureDevice *> *devices = discoverVideoDevices();

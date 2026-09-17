@@ -283,6 +283,7 @@ if(BUILD_TESTS)
   )
   target_link_libraries(test_backgrounds PRIVATE
     Qt6::Core
+    Qt6::Widgets
     ${OpenCV_LIBS}
   )
   add_test(NAME backgrounds COMMAND test_backgrounds)

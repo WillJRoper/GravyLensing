@@ -23,6 +23,17 @@ public:
 
   static std::vector<std::string> availableDeviceNames();
 
+  /// Camera access states this process can be in.
+  enum class Access { Granted, Denied, Undecided };
+
+  /// Current camera authorization, without prompting.
+  static Access accessStatus();
+
+  /// Show the system camera prompt and block until the user answers.
+  /// AVFoundation delivers no frames until then, so capture must not be
+  /// started before this returns.
+  static bool requestAccess();
+
   bool open(std::string &error, int desiredFps = 30, int desiredWidth = 1280,
             int desiredHeight = 720);
   void close();

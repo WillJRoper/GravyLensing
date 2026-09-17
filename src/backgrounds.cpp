@@ -28,6 +28,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
+#include <QMessageBox>
 #include <QStandardPaths>
 
 // Local includes
@@ -62,6 +63,12 @@ Backgrounds *initBackgrounds(const std::string &dir, int width, int height,
       new Backgrounds(dir, width, height, fitMode, forceRebuild);
   if (!backgrounds->load()) {
     std::cerr << "Fatal: No images found in directory: " << dir << "\n";
+    QMessageBox::critical(
+        nullptr, "No Backgrounds Found",
+        QString("No usable background images were found in:\n%1\n\nPick a "
+                "folder of images on the next launch, or reinstall "
+                "GravyLensing to restore the ones it ships with.")
+            .arg(QString::fromStdString(dir)));
     std::exit(EXIT_FAILURE);
   }
   return backgrounds;

@@ -31,6 +31,7 @@
 #include <string>
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QSettings>
 #include <QThread>
 
@@ -179,6 +180,17 @@ struct AppSettings {
         s.value("backgroundsDir", QString::fromStdString(backgroundsDir))
             .toString()
             .toStdString();
+#ifdef __APPLE__
+    // The shipped folder lives inside the bundle, so a saved absolute path to
+    // it goes stale as soon as the app moves - most often after a first run
+    // straight from the mounted DMG. Always prefer the running bundle's own
+    // copy, and fall back to it when a custom folder has disappeared.
+    const std::string bundledBackgrounds = AppSettings().backgroundsDir;
+    if (backgroundsDir.find("/Contents/Resources/backgrounds") !=
+            std::string::npos ||
+        !QDir(QString::fromStdString(backgroundsDir)).exists())
+      backgroundsDir = bundledBackgrounds;
+#endif
     backgroundWidth = s.value("backgroundWidth", backgroundWidth).toInt();
     backgroundHeight = s.value("backgroundHeight", backgroundHeight).toInt();
     backgroundFitMode =

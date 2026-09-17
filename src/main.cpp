@@ -58,6 +58,7 @@
 
 #ifdef __APPLE__
 #include "apple_video_frame.hpp"
+#include "avfoundation_camera.hpp"
 #endif
 
 // Register cv::Mat as a Qt metatype
@@ -147,6 +148,8 @@ int main(int argc, char **argv) {
   // than the more generic plugin path returned at runtime, so probe a few
   // likely roots and only accept one that contains the Cocoa platform plugin.
   const QStringList pluginRoots = {
+      QFileInfo(QString::fromLocal8Bit(argv[0])).absolutePath() +
+          "/../PlugIns",
       QLibraryInfo::path(QLibraryInfo::PluginsPath),
       "/opt/homebrew/opt/qtbase/share/qt/plugins",
       "/opt/homebrew/share/qt/plugins",
@@ -176,6 +179,20 @@ int main(int argc, char **argv) {
   qRegisterMetaType<cv::Rect>("cv::Rect");
 #ifdef __APPLE__
   qRegisterMetaType<AppleVideoFrame>("AppleVideoFrame");
+#endif
+
+#ifdef __APPLE__
+  // Ask before any capture starts: AVFoundation hands out no frames while the
+  // system prompt is still on screen, so an unanswered prompt looks exactly
+  // like a camera that cannot be opened.
+  if (!AvFoundationCamera::requestAccess()) {
+    QMessageBox::critical(
+        nullptr, "Camera Access Needed",
+        "GravyLensing needs the camera to create the lensing effect.\n\n"
+        "Allow it in System Settings > Privacy & Security > Camera, then "
+        "open GravyLensing again.");
+    return -1;
+  }
 #endif
 
   QSettings savedSettings;
@@ -798,6 +815,11 @@ int main(int argc, char **argv) {
   };
 
   if (!startPipeline(activeSettings, sessionSelections)) {
+    QMessageBox::critical(
+        nullptr, "Could Not Start",
+        "GravyLensing could not start its camera pipeline.\n\nCheck that the "
+        "selected camera is still connected and that no other app is using "
+        "it, then open GravyLensing again.");
     return -1;
   }
 

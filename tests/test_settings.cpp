@@ -38,6 +38,15 @@ int main(int argc, char **argv) {
       loaded.lowerRes != 0.75f || !loaded.showLensContents)
     return 1;
 
+  // A backgrounds folder inside some other bundle (an old DMG run, a moved
+  // app) must give way to the copy shipped with the running bundle.
+  stored.setValue("backgroundsDir",
+                  "/Volumes/GravyLensing/GravyLensing.app/Contents/Resources/"
+                  "backgrounds");
+  loaded.load(stored);
+  if (loaded.backgroundsDir != AppSettings().backgroundsDir)
+    return 1;
+
   stored.setValue("automaticThreads", true);
   stored.setValue("nthreads", 2);
   loaded.load(stored);
