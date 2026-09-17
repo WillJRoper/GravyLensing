@@ -1,8 +1,10 @@
 # GravyLensing
 
-<img src="assets/GravyLensingIcon.png" align="right" width="140px" alt="GravyLensing icon"/>
-
 [![Docs](https://github.com/WillJRoper/gravy-lensing/actions/workflows/docs.yml/badge.svg)](https://willjroper.github.io/gravy-lensing/)
+[![macOS Release](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml/badge.svg)](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml)
+[![Latest Release](https://img.shields.io/github/v/release/WillJRoper/GravyLensing)](https://github.com/WillJRoper/GravyLensing/releases/latest)
+[![License: GPLv3](https://img.shields.io/github/license/WillJRoper/GravyLensing)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/WillJRoper/GravyLensing/total)](https://github.com/WillJRoper/GravyLensing/releases)
 
 A real-time gravitational lensing demo written in C++, supported by the
 Goodwood Festival of Speed Future Lab.
