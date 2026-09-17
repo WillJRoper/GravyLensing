@@ -1,18 +1,22 @@
 # GravyLensing
 
+<img src="docs/source/_static/gravylensing-logo.png" align="right" width="140px" alt="GravyLensing logo"/>
+
 [![Docs](https://github.com/WillJRoper/gravy-lensing/actions/workflows/docs.yml/badge.svg)](https://willjroper.github.io/GravyLensing/)
 [![macOS Release](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml/badge.svg)](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml)
 [![Latest Release](https://img.shields.io/github/v/release/WillJRoper/GravyLensing)](https://github.com/WillJRoper/GravyLensing/releases/latest)
 [![License: GPLv3](https://img.shields.io/github/license/WillJRoper/GravyLensing)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/WillJRoper/GravyLensing/total)](https://github.com/WillJRoper/GravyLensing/releases)
 
+GravyLensing is a real-time gravitational-lensing demo written in C++ and developed with support from the Goodwood Festival of Speed Future Lab.
+
+It uses a live camera feed to identify a projected mass distribution, either a person or an object of a chosen colour, then applies an FFT-based deflection calculation to lens a background image around it.
+
 > **Requires an Apple Silicon Mac (M1 or newer) running macOS 14 or later.**
 
-GravyLensing is a real-time gravitational-lensing demo written in C++ and
-developed with support from the Goodwood Festival of Speed Future Lab. It uses
-a live camera feed to identify a projected mass distribution, either a person
-or an object of a chosen colour, then applies an FFT-based deflection
-calculation to lens a background image around it.
+## Example
+
+An example running in debug mode to show the camera feed, the person mask, the background, and the final lensed output.
 
 ![SCR-20250429-qemj](https://github.com/user-attachments/assets/39f96883-53b8-4d13-b399-3d390bf4328f)
 
