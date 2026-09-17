@@ -49,12 +49,7 @@ private:
 #else
   QSpinBox *cameraSpin_ = nullptr;
 #endif
-  QComboBox *fpsCombo_ = nullptr;
-  QComboBox *cameraResolutionCombo_ = nullptr;
-  QSpinBox *customFpsSpin_ = nullptr;
-  QComboBox *qualityCombo_ = nullptr;
   QCheckBox *mirrorCheck_ = nullptr;
-  QCheckBox *selectRegionCheck_ = nullptr;
   QLineEdit *backgroundsEdit_ = nullptr;
   QRadioButton *includedBackgroundsRadio_ = nullptr;
   QRadioButton *customBackgroundsRadio_ = nullptr;

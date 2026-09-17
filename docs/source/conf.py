@@ -31,7 +31,8 @@ html_theme = "furo"
 html_title = "GravyLensing"
 html_show_sourcelink = False
 html_static_path = ["_static"]
-html_logo = "_static/gravylensing-logo.png"
+html_logo = "_static/gravylensing-logo.webp"
+html_css_files = ["custom.css"]
 html_theme_options = {
     "source_repository": "https://github.com/WillJRoper/gravy-lensing/",
     "source_branch": "main",

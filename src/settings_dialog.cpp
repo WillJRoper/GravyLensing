@@ -21,6 +21,7 @@
  * along with GravyLensing. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "app_banner.hpp"
 #include "settings_dialog.hpp"
 
 #include <QColorDialog>
@@ -176,6 +177,10 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   mainLayout->setContentsMargins(14, 14, 14, 14);
   mainLayout->setSpacing(12);
 
+  mainLayout->addWidget(
+      new AppBanner("GRAVY LENSING", "Tune the lens, the camera, and the view.",
+                    104, this));
+
   auto *body = new QHBoxLayout;
   body->setSpacing(12);
   mainLayout->addLayout(body, 1);
@@ -188,8 +193,8 @@ SettingsDialog::SettingsDialog(const AppSettings &settings,
   sidebar->addItems({"Lens", "Camera & Region", "Lensing Effect",
                      "Backgrounds", "Advanced"});
   sidebar->setStyleSheet(
-      "QListWidget#settingsSidebar { background: palette(alternate-base); "
-      "border: 0; border-radius: 12px; padding: 8px; outline: 0; }"
+      "QListWidget#settingsSidebar { background: transparent; "
+      "border: 0; padding: 4px; outline: 0; }"
       "QListWidget#settingsSidebar::item { border-radius: 7px; padding: 10px "
       "12px; }"
       "QListWidget#settingsSidebar::item:selected { "

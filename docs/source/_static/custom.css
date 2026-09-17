@@ -1,0 +1,5 @@
+/* Furo lets the logo fill the sidebar width; the mark reads fine much
+   smaller, and a smaller box leaves more room for the nav. */
+.sidebar-logo {
+  max-width: 7rem;
+}

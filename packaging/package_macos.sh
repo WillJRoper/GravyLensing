@@ -22,12 +22,19 @@ cmake -S "$ROOT" -B "$BUILD_DIR" \
 rm -rf "$APP"
 cmake --build "$BUILD_DIR" --config Release --parallel
 
-COCOA_PLUGIN="$APP/Contents/PlugIns/platforms/libqcocoa.dylib"
-mkdir -p "$(dirname "$COCOA_PLUGIN")"
-cp "$(brew --prefix qtbase)/share/qt/plugins/platforms/libqcocoa.dylib" \
-  "$COCOA_PLUGIN"
+# The platform plugin is what lets the app open a window at all; the style
+# plugin is what makes its controls look like macOS controls. Without the
+# latter Qt silently falls back to Fusion, which draws flat, alien buttons.
+QT_PLUGINS="$(brew --prefix qtbase)/share/qt/plugins"
+DEPLOYED_PLUGINS=()
+for plugin in platforms/libqcocoa.dylib styles/libqmacstyle.dylib; do
+  target="$APP/Contents/PlugIns/$plugin"
+  mkdir -p "$(dirname "$target")"
+  cp "$QT_PLUGINS/$plugin" "$target"
+  DEPLOYED_PLUGINS+=(-executable="$target")
+done
 "$MACDEPLOYQT" "$APP" -always-overwrite -verbose=1 -no-codesign \
-  -no-plugins -executable="$COCOA_PLUGIN" -libpath="$QT_PREFIX/lib"
+  -no-plugins "${DEPLOYED_PLUGINS[@]}" -libpath="$QT_PREFIX/lib"
 
 # macdeployqt only writes qt.conf when it deploys plugins itself; without it Qt
 # keeps the Homebrew plugin dir in its search path and loads that libqcocoa

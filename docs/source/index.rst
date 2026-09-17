@@ -1,10 +1,6 @@
 GravyLensing
 ^^^^^^^^^^^^
 
-.. image:: _static/gravylensing-logo.png
-   :alt: GravyLensing person lens logo
-   :width: 220px
-
 GravyLensing is a real-time gravitational lensing demo. It takes a live camera
 feed, works out where the "mass" is in each frame — a person, or an object of a
 chosen colour — and uses an FFT-based deflection calculation to lens a
@@ -15,7 +11,7 @@ Festival of Speed Future Lab. The physics is the real thing: the mask acts as a
 projected mass distribution, and the background image is deflected the way a
 distant galaxy is deflected by a foreground cluster.
 
-.. image:: https://github.com/user-attachments/assets/39f96883-53b8-4d13-b399-3d390bf4328f
+.. image:: _static/gravylensing-demo.webp
    :alt: GravyLensing running with a lensed background
    :width: 100%
 

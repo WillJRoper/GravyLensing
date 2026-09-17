@@ -1,6 +1,6 @@
 # GravyLensing
 
-<img src="docs/source/_static/gravylensing-logo.png" align="right" width="140px" alt="GravyLensing logo"/>
+<img src="docs/source/_static/gravylensing-logo.webp" align="right" width="140px" alt="GravyLensing logo"/>
 
 [![Docs](https://github.com/WillJRoper/gravy-lensing/actions/workflows/docs.yml/badge.svg)](https://willjroper.github.io/GravyLensing/)
 [![macOS Release](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml/badge.svg)](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml)
