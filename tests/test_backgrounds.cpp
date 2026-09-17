@@ -70,8 +70,20 @@ int main() {
       composited.at<cv::Vec3b>(0, 0) == cv::Vec3b(100, 110, 120) &&
       composited.at<cv::Vec3b>(0, 1) == cv::Vec3b(10, 20, 30);
 
+  // An unusable folder must be reported, never fatal: initBackgrounds used to
+  // call std::exit here, which looked like a crash on launch when a saved
+  // folder had gone away or macOS was gating it.
+  const bool missingReported =
+      initBackgrounds((root / "not-here").string(), 120, 40, "crop") == nullptr;
+  const fs::path emptyDir = root / "empty";
+  fs::create_directories(emptyDir);
+  const bool emptyReported =
+      initBackgrounds(emptyDir.string(), 120, 40, "crop") == nullptr &&
+      !Backgrounds::looksAccessDenied(emptyDir.string());
+
   fs::remove_all(root);
-  return loadedAll && navigated && switched && retained && capped &&
+  return missingReported && emptyReported && loadedAll && navigated &&
+                 switched && retained && capped &&
                  letterboxed && stretchedToSize && cacheReusable && geometry &&
                  failedSwitchRetained && compositing
              ? 0

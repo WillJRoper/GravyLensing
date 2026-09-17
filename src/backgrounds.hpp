@@ -60,6 +60,10 @@ public:
                  const std::string &fitMode, bool forceRebuild = false);
 
   static size_t discoverableImageCount(const std::string &dir);
+
+  /// True when @p dir exists but the system refuses to let us read it, which
+  /// on macOS means a privacy-gated folder rather than an empty one.
+  static bool looksAccessDenied(const std::string &dir);
   static size_t cacheImageCount();
   static uint64_t cacheSizeBytes();
   static bool clearCache();

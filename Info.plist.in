@@ -25,6 +25,14 @@
   <string>14.0</string>
   <key>NSCameraUsageDescription</key>
   <string>GravyLensing uses the camera to create real-time lensing effects.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>GravyLensing reads background images from the folder you choose.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>GravyLensing reads background images from the folder you choose.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>GravyLensing reads background images from the folder you choose.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>GravyLensing reads background images from the folder you choose.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>

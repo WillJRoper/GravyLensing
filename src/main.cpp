@@ -275,6 +275,43 @@ int main(int argc, char **argv) {
                       appSettings.backgroundHeight,
                       appSettings.backgroundFitMode,
                       appSettings.rebuildBackgroundCache);
+
+  // A saved folder that this build cannot read - deleted since, or one macOS
+  // gates behind a privacy prompt - must not be fatal: fall back to the
+  // shipped backgrounds, say why, and save that so the next launch is clean.
+  if (backgrounds == nullptr) {
+    const std::string saved = appSettings.backgroundsDir;
+    const bool denied = Backgrounds::looksAccessDenied(saved);
+    appSettings.backgroundsDir = AppSettings().backgroundsDir;
+    backgrounds = initBackgrounds(appSettings.backgroundsDir,
+                                  appSettings.backgroundWidth,
+                                  appSettings.backgroundHeight,
+                                  appSettings.backgroundFitMode,
+                                  appSettings.rebuildBackgroundCache);
+    if (backgrounds == nullptr) {
+      QMessageBox::critical(
+          nullptr, "No Backgrounds Found",
+          QString("GravyLensing could not read its own background images "
+                  "from:\n%1\n\nReinstalling should restore them.")
+              .arg(QString::fromStdString(appSettings.backgroundsDir)));
+      return -1;
+    }
+    savedSettings.setValue(
+        "backgroundsDir",
+        QString::fromStdString(appSettings.backgroundsDir));
+    QMessageBox::warning(
+        nullptr, "Backgrounds Folder Unavailable",
+        QString("No background images could be read from:\n%1\n\n%2\n\n"
+                "The included backgrounds are being used instead. Pick a "
+                "different folder any time in Settings > Backgrounds.")
+            .arg(QString::fromStdString(saved))
+            .arg(denied
+                     ? "macOS is blocking access to that folder. Allow it "
+                       "under System Settings > Privacy & Security > Files "
+                       "and Folders, or move the images elsewhere."
+                     : "The folder may have been moved or deleted, or it may "
+                       "hold no images in a supported format."));
+  }
   appSettings.rebuildBackgroundCache = false;
   ViewPort *vp = initViewport(backgrounds, appSettings, appSettings.debugGrid);
 
