@@ -1,5 +1,9 @@
 # GravyLensing
 
+<img src="assets/GravyLensingIcon.png" align="right" width="140px" alt="GravyLensing icon"/>
+
+[![Docs](https://github.com/WillJRoper/gravy-lensing/actions/workflows/docs.yml/badge.svg)](https://willjroper.github.io/gravy-lensing/)
+
 A real-time gravitational lensing demo written in C++, supported by the
 Goodwood Festival of Speed Future Lab.
 
@@ -30,19 +34,19 @@ This produces `build/GravyLensing.app`.
 
 ## Documentation
 
-Full documentation lives in [`docs/`](docs) and covers:
+**[willjroper.github.io/gravy-lensing](https://willjroper.github.io/gravy-lensing/)**
 
-- [Installation](docs/source/getting_started/installation.rst) and
-  [quick start](docs/source/getting_started/quickstart.rst)
-- [Ways to run the demo](docs/source/running_modes.rst) — mirror mode and
-  telescope mode, and how to choose
-- [Functionality](docs/source/usage/index.rst) — lens modes, masking, the lens
-  itself, backgrounds, shortcuts, and CLI flags
-- [Running a good demo](docs/source/recommendations.rst) — setting up a real
-  space
-- [FAQ](docs/source/faq.rst)
+- [Installation](https://willjroper.github.io/gravy-lensing/getting_started/installation.html)
+  and [quick start](https://willjroper.github.io/gravy-lensing/getting_started/quickstart.html)
+- [Ways to run the demo](https://willjroper.github.io/gravy-lensing/running_modes.html)
+  — mirror mode and telescope mode, and how to choose
+- [Functionality](https://willjroper.github.io/gravy-lensing/usage/index.html) —
+  lens modes, masking, the lens itself, backgrounds, shortcuts, and CLI flags
+- [Running a good demo](https://willjroper.github.io/gravy-lensing/recommendations.html)
+  — setting up a real space
+- [FAQ](https://willjroper.github.io/gravy-lensing/faq.html)
 
-Build it locally with:
+The sources live in [`docs/`](docs). Build them locally with:
 
 ```bash
 pip install -r docs/requirements.txt
