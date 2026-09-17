@@ -1,26 +1,31 @@
 # GravyLensing
 
-[![Docs](https://github.com/WillJRoper/gravy-lensing/actions/workflows/docs.yml/badge.svg)](https://willjroper.github.io/gravy-lensing/)
+[![Docs](https://github.com/WillJRoper/gravy-lensing/actions/workflows/docs.yml/badge.svg)](https://willjroper.github.io/GravyLensing/)
 [![macOS Release](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml/badge.svg)](https://github.com/WillJRoper/gravy-lensing/actions/workflows/release-macos.yml)
 [![Latest Release](https://img.shields.io/github/v/release/WillJRoper/GravyLensing)](https://github.com/WillJRoper/GravyLensing/releases/latest)
 [![License: GPLv3](https://img.shields.io/github/license/WillJRoper/GravyLensing)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/WillJRoper/GravyLensing/total)](https://github.com/WillJRoper/GravyLensing/releases)
 
-A real-time gravitational lensing demo written in C++ for Apple Silicon Macs, supported by the Goodwood Festival of Speed Future Lab.
+> **Requires an Apple Silicon Mac (M1 or newer) running macOS 14 or later.**
 
-GravyLensing takes a live camera feed, works out where the "mass" is in each frame — a person, or an object of a chosen colour — and uses an FFT-based deflection calculation to lens a background image around it.
+GravyLensing is a real-time gravitational-lensing demo written in C++ and
+developed with support from the Goodwood Festival of Speed Future Lab. It uses
+a live camera feed to identify a projected mass distribution, either a person
+or an object of a chosen colour, then applies an FFT-based deflection
+calculation to lens a background image around it.
 
 ![SCR-20250429-qemj](https://github.com/user-attachments/assets/39f96883-53b8-4d13-b399-3d390bf4328f)
 
 ## Install
 
-Users can download the latest DMG from
-[GitHub Releases](https://github.com/WillJRoper/gravy-lensing/releases), drag
-**GravyLensing** to **Applications**, and open it. Nothing else is required.
+Download the latest signed DMG from
+[GitHub Releases](https://github.com/WillJRoper/GravyLensing/releases), drag
+**GravyLensing** to **Applications**, and open it. No Homebrew or command-line
+setup is required.
 
-### Development installs 
+### Build from source
 
-To build from source:
+Developers can build locally with Homebrew:
 
 ```bash
 brew install cmake fftw libomp opencv qt
@@ -34,17 +39,17 @@ This produces `build/GravyLensing.app`.
 
 ## Documentation
 
-**[willjroper.github.io/gravy-lensing](https://willjroper.github.io/gravy-lensing/)**
+**[willjroper.github.io/GravyLensing](https://willjroper.github.io/GravyLensing/)**
 
-- [Installation](https://willjroper.github.io/gravy-lensing/getting_started/installation.html)
-  and [quick start](https://willjroper.github.io/gravy-lensing/getting_started/quickstart.html)
-- [Ways to run the demo](https://willjroper.github.io/gravy-lensing/running_modes.html)
+- [Installation](https://willjroper.github.io/GravyLensing/getting_started/installation.html)
+  and [quick start](https://willjroper.github.io/GravyLensing/getting_started/quickstart.html)
+- [Ways to run the demo](https://willjroper.github.io/GravyLensing/running_modes.html)
   — mirror mode and telescope mode, and how to choose
-- [Functionality](https://willjroper.github.io/gravy-lensing/usage/index.html) —
+- [Functionality](https://willjroper.github.io/GravyLensing/usage/index.html) —
   lens modes, masking, the lens itself, backgrounds, shortcuts, and CLI flags
-- [Running a good demo](https://willjroper.github.io/gravy-lensing/recommendations.html)
+- [Running a good demo](https://willjroper.github.io/GravyLensing/recommendations.html)
   — setting up a real space
-- [FAQ](https://willjroper.github.io/gravy-lensing/faq.html)
+- [FAQ](https://willjroper.github.io/GravyLensing/faq.html)
 
 The sources live in [`docs/`](docs). Build them locally with:
 
