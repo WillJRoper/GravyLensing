@@ -33,6 +33,10 @@
 
 # Apple sepcific files 
 *.DS_Store
+*.cer
+*.csr
+*.p8
+*.p12
 
 # Ignore the build directory 
 build/
