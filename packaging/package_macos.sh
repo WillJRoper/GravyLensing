@@ -29,6 +29,11 @@ cp "$(brew --prefix qtbase)/share/qt/plugins/platforms/libqcocoa.dylib" \
 "$MACDEPLOYQT" "$APP" -always-overwrite -verbose=1 -no-codesign \
   -no-plugins -executable="$COCOA_PLUGIN" -libpath="$QT_PREFIX/lib"
 
+# macdeployqt only writes qt.conf when it deploys plugins itself; without it Qt
+# keeps the Homebrew plugin dir in its search path and loads that libqcocoa
+# instead of the bundled one, which aborts on a different-Team-ID signature.
+printf '[Paths]\nPlugins = PlugIns\n' > "$APP/Contents/Resources/qt.conf"
+
 if find "$APP/Contents" -type f -perm -111 -exec otool -L {} \; 2>/dev/null | \
     grep -E '/(opt/homebrew|usr/local)/' >/dev/null; then
   echo "Package contains unresolved Homebrew dependencies" >&2
