@@ -21,11 +21,18 @@ struct FormatChoice {
 };
 
 static NSArray<AVCaptureDevice *> *discoverVideoDevices() {
+  NSArray<AVCaptureDeviceType> *deviceTypes;
+  if (@available(macOS 14.0, *)) {
+    deviceTypes = @[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
+                     AVCaptureDeviceTypeExternal ];
+  } else {
+    deviceTypes = @[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
+                     AVCaptureDeviceTypeExternalUnknown ];
+  }
   return [AVCaptureDeviceDiscoverySession
-             discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
-                                                AVCaptureDeviceTypeExternal ]
-                                  mediaType:AVMediaTypeVideo
-                                   position:AVCaptureDevicePositionUnspecified]
+             discoverySessionWithDeviceTypes:deviceTypes
+                                   mediaType:AVMediaTypeVideo
+                                    position:AVCaptureDevicePositionUnspecified]
       .devices;
 }
 

@@ -28,6 +28,11 @@
 #include <numeric>
 #include <unordered_map>
 
+#include <opencv2/imgproc.hpp>
+#if CV_VERSION_MAJOR >= 5
+#include <opencv2/geometry.hpp>
+#endif
+
 // Local includes
 #include "vision_segmentation_helper.hpp"
 #include "perf_log.hpp"

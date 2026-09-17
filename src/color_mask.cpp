@@ -8,6 +8,11 @@
 #include "processing_geometry.hpp"
 #include "perf_log.hpp"
 
+#include <opencv2/imgproc.hpp>
+#if CV_VERSION_MAJOR >= 5
+#include <opencv2/geometry.hpp>
+#endif
+
 #ifdef USE_MPS
 #include "metal_helper.h"
 
