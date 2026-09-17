@@ -178,9 +178,12 @@ add_executable(gravy_lens ${SOURCES})
 if(APPLE)
   file(GLOB BACKGROUND_RESOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/backgrounds/*.tiff")
-  target_sources(gravy_lens PRIVATE ${BACKGROUND_RESOURCES})
+  set(APP_ICON "${CMAKE_SOURCE_DIR}/assets/GravyLensing.icns")
+  target_sources(gravy_lens PRIVATE ${BACKGROUND_RESOURCES} ${APP_ICON})
   set_source_files_properties(${BACKGROUND_RESOURCES} PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources/backgrounds")
+  set_source_files_properties(${APP_ICON} PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources")
   target_sources(gravy_lens PRIVATE LICENSE)
   set_source_files_properties(LICENSE PROPERTIES
     MACOSX_PACKAGE_LOCATION "Resources")

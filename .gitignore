@@ -37,6 +37,7 @@
 *.csr
 *.p8
 *.p12
+assets/*.iconset/
 
 # Ignore the build directory 
 build/
