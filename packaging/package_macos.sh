@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
 BUILD_DIR="${BUILD_DIR:-$ROOT/build-release}"
 DIST_DIR="${DIST_DIR:-$ROOT/dist}"
 APP="$BUILD_DIR/GravyLensing.app"
@@ -37,7 +38,7 @@ if [[ -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
   codesign --force --deep --options runtime --timestamp \
     --sign "$APPLE_SIGNING_IDENTITY" "$APP"
   codesign --force --options runtime --timestamp \
-    --entitlements "$ROOT/entitlements.plist" \
+    --entitlements "$HERE/entitlements.plist" \
     --sign "$APPLE_SIGNING_IDENTITY" "$APP"
 else
   codesign --force --deep --sign - "$APP"
@@ -51,11 +52,5 @@ ln -s /Applications "$DIST_DIR/stage/Applications"
 hdiutil create -volname GravyLensing -srcfolder "$DIST_DIR/stage" \
   -ov -format UDZO "$DMG"
 rm -rf "$DIST_DIR/stage"
-
-if [[ -n "${APPLE_NOTARY_PROFILE:-}" ]]; then
-  xcrun notarytool submit "$DMG" \
-    --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
-  xcrun stapler staple "$DMG"
-fi
 
 echo "$DMG"

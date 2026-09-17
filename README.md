@@ -91,6 +91,12 @@ CMake creates `build/GravyLensing.app`.
 | `-DENABLE_PROFILING=ON` | OFF | Periodic `[Perf]` log lines showing average ms and fps per pipeline stage |
 | `-DBUILD_TESTS=OFF` | ON | Skip building the unit-test binary |
 
+### Packaging a release
+
+The signed, distributable DMG is built by `packaging/package_macos.sh`. See
+[packaging/README.md](packaging/README.md) for what it does, the environment
+variables it takes, and how CI uses it.
+
 ## Usage
 
 ### Quick start
