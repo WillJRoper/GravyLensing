@@ -25,6 +25,7 @@ int main(int argc, char **argv) {
   saved.colorMaskSmooth = 0.3f;
   saved.lowerRes = 0.75f;
   saved.showLensContents = true;
+  saved.backgroundsDir = dir.path().toStdString();
   saved.save(stored);
 
   AppSettings loaded;
@@ -35,7 +36,8 @@ int main(int argc, char **argv) {
       loaded.cameraHeight != 1080 || loaded.lensEdgeSoftness != 2.3f ||
       loaded.colorMinObjectArea != 900 ||
       loaded.colorPersistenceFrames != 12 || loaded.colorMaskSmooth != 0.3f ||
-      loaded.lowerRes != 0.75f || !loaded.showLensContents)
+      loaded.lowerRes != 0.75f || !loaded.showLensContents ||
+      loaded.backgroundsDir != saved.backgroundsDir)
     return 1;
 
   // A backgrounds folder inside some other bundle (an old DMG run, a moved
